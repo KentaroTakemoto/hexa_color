@@ -1120,7 +1120,7 @@
             for(let i=0; i<numLocked && index < availableTiles.length; i++) {
                 let t = availableTiles[index++];
                 t.type = TILE_TYPE_LOCKED; t.state = 'special'; 
-                t.unlockScore = Math.min(Math.floor(Math.random() * ((200 - 20) / 10 + 1)) * 10 + 20, targetScore);
+                t.unlockScore = Math.min(Math.floor(Math.random() * ((200 - 20) / 10 + 1)) * 10 + 20, targetScore - 20);
             }
             
             hexGridData.forEach(t => {
@@ -1871,4 +1871,5 @@
         window.onload = init;
     </script>
 </body>
+
 </html>
