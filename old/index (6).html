@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hex Puzzle Game - Camera System</title>
+    <style>
+        /* 画面全体のレイアウト設定：余白を消し、スクロールを防止 */
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background-color: #C0D6E4; /* 背景色：空色 */
+            user-select: none; /* テキスト選択を無効化 */
+        }
+        /* ゲーム画面を表示するコンテナのサイズ設定 */
+        #game-container {
+            width: 100vw;
+            height: 100vh;
+            touch-action: none; /* スマホでのデフォルトのスクロール/ズーム挙動を抑制 */
+        }
+        
+        /* 補充用の3つの山を表示する下部UI領域のレイアウト設定 */
+        #ui-container {
+            position: absolute;
+            bottom: 30px; /* 画面下部からの配置マージン */
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            gap: 15px; /* スロット間の隙間幅 */
+            padding: 15px 20px;
+            background-color: #A0C0D6; /* トレイのベース背景色 */
+            border-radius: 20px;
+            border: 4px solid #8BAFC8; /* トレイの縁取り色 */
+            z-index: 10;
+            pointer-events: none; /* 現時点ではクリック判定を透過させる */
+        }
+        
+        /* 各スロット（山の置き場）のスタイル設定 */
+        .slot {
+            width: 80px; /* スロットの横幅 */
+            height: 80px; /* スロットの縦幅 */
+            background-color: rgba(0, 0, 0, 0.1); /* スロットの背景色（半透明） */
+            border-radius: 15px; /* スロットの角丸具合 */
+        }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
+</head>
+<body>
+    <div id="game-container"></div>
+    
+    <div id="ui-container">
+        <div class="slot" id="slot-0"></div>
+        <div class="slot" id="slot-1"></div>
+        <div class="slot" id="slot-2"></div>
+    </div>
+
+    <script>
+        /**
+         * 1. グローバル設定とデータ構造の初期化
+         * ゲーム全体で使用する定数、カメラのパラメータ、状態管理用変数を定義します。
+         */
+        const HEX_SIZE = 2; // 六角形の中心から頂点までの基本距離
+        const HEX_HEIGHT = 0.5; // マスの厚み（Y軸方向の高さ）
+        const HEX_MARGIN = 0.1; // マス同士の隙間の大きさ
+        const MAP_RADIUS = 2; // フィールドの層数（中心から外側への周回数）
+        
+        // カメラ制御用パラメータを保持するオブジェクト
+        const cameraParams = {
+            azimuth: Math.PI / 6, // 現在の方位角（ラジアン）
+            distance: 40 // カメラから中心までの距離（初期値）
+        };
+
+        const CAMERA_POLAR = Math.PI / 3.5; // 仰角を固定（約51度：フィールドを見下ろす最適な角度）
+        const ROTATION_SPEED = 0.008; // ドラッグ時の回転感度
+        const ZOOM_MARGIN = 2.2; // フィールドが画面に収まる際の距離の倍率
+        
+        const TILE_HEIGHT = 0.25; // タイル1枚の厚み
+        const TILE_RADIUS = HEX_SIZE * 0.85; // タイルの半径
+        
+        // タイルに使用する8色のカラーコード定義
+        const TILE_COLORS = {
+            red: 0xFF4136,
+            blue: 0x0074D9,
+            green: 0x2ECC40,
+            yellow: 0xFFDC00,
+            purple: 0xB10DC9,
+            cyan: 0x7FDBFF,
+            black: 0x111111,
+            white: 0xFFFFFF
+        };
+
+        // マウス/タッチ操作の状態管理用変数
+        let isDragging = false; // ドラッグ中かどうかのフラグ
+        let previousPointerX = 0; // 直前のポインターのX座標
+        let previousPointerY = 0; // 直前のポインターのY座標
+
+        let scene, camera, renderer;
+        let hexGridData = []; // 各マスの状態（座標、スタック等）を保持する配列
+        let topTextures = []; // 数字が描かれたテクスチャを保持し、カメラに合わせて回転させるための配列
+
+        /**
+         * 2. 座標変換処理
+         * 軸座標系 (q, r) から 3D空間のワールド座標 (x, z) への変換を行います。
+         * 六角形グリッド（Flat-topped型）の幾何学計算に基づき、中心座標を算出します。
+         */
+        function axialToWorld(q, r, size) {
+            const x = size * (3/2) * q;
+            const z = size * (Math.sqrt(3)/2) * q + size * Math.sqrt(3) * r;
+            return { x, z };
+        }
+
+        /**
+         * 3. テクスチャ生成処理
+         * 数字を描画したテクスチャをCanvas APIを利用して動的に生成します。
+         * 生成したテクスチャは、スタックの最上部タイルの上面マテリアルとして使用されます。
+         */
+        function createNumberTexture(number, colorHex) {
+            const canvas = document.createElement('canvas');
+            canvas.width = 256; // テクスチャの解像度幅
+            canvas.height = 256; // テクスチャの解像度高さ
+            const ctx = canvas.getContext('2d');
+
+            // 背景を該当タイルの色で塗りつぶす
+            ctx.fillStyle = '#' + colorHex.toString(16).padStart(6, '0');
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // 数字テキストの描画スタイル設定
+            ctx.fillStyle = '#ffffff'; // 文字色
+            ctx.font = 'bold 120px Arial'; // フォントとサイズ
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            
+            // 視認性を上げるためのテキストの縁取り（黒）
+            ctx.strokeStyle = '#000000';
+            ctx.lineWidth = 6;
+            ctx.strokeText(number, canvas.width / 2, canvas.height / 2);
+            
+            // テキストの塗りつぶし描画
+            ctx.fillText(number, canvas.width / 2, canvas.height / 2);
+
+            const texture = new THREE.CanvasTexture(canvas);
+            texture.center.set(0.5, 0.5); // 回転の中心をテクスチャの中央に設定
+            return texture;
+        }
+
+        /**
+         * 4. タイルスタック管理クラス
+         * 1つのマスに置かれる「タイルの山（スタック）」を管理・描画するためのクラスです。
+         * プロパティとして構成データ（色と枚数）を持ち、Three.jsのメッシュグループを生成します。
+         */
+        class TileStack {
+            /**
+             * インスタンス生成時にランダムなスタック構成を生成し、3Dモデルを作成します。
+             */
+            constructor() {
+                this.stackData = this.generateRandomStack();
+                this.meshGroup = this.createMeshGroup();
+            }
+
+            /**
+             * タイル山の構成データ（2〜9枚、最大3色、同色は連続）をランダムに生成します。
+             */
+            generateRandomStack() {
+                const totalCount = Math.floor(Math.random() * 8) + 2; // 合計枚数: 2〜9枚
+                const maxColors = Math.min(3, totalCount); // 最大色数: 3色
+                const colorCount = Math.floor(Math.random() * maxColors) + 1; // 実際に選ばれる色数
+
+                const colors = Object.keys(TILE_COLORS);
+                const selectedColors = [];
+                
+                // ランダムに色を抽出
+                while (selectedColors.length < colorCount) {
+                    const color = colors[Math.floor(Math.random() * colors.length)];
+                    if (!selectedColors.includes(color)) {
+                        selectedColors.push(color);
+                    }
+                }
+
+                const stackData = [];
+                let remaining = totalCount;
+                
+                // 各色ごとの枚数を割り当て
+                for (let i = 0; i < colorCount; i++) {
+                    if (i === colorCount - 1) {
+                        stackData.push({ color: selectedColors[i], count: remaining });
+                    } else {
+                        const maxForThis = remaining - (colorCount - 1 - i);
+                        const count = Math.floor(Math.random() * maxForThis) + 1;
+                        stackData.push({ color: selectedColors[i], count: count });
+                        remaining -= count;
+                    }
+                }
+                return stackData;
+            }
+
+            /**
+             * stackDataに基づいて、Three.jsのCylinderGeometryを積み上げたMeshGroupを構築します。
+             */
+            createMeshGroup() {
+                const group = new THREE.Group();
+                let currentHeight = 0; // 現在の積み上げ高さ
+                const geometry = new THREE.CylinderGeometry(TILE_RADIUS, TILE_RADIUS, TILE_HEIGHT, 6);
+
+                for (let i = 0; i < this.stackData.length; i++) {
+                    const block = this.stackData[i];
+                    const colorHex = TILE_COLORS[block.color];
+
+                    for (let j = 0; j < block.count; j++) {
+                        const sideMaterial = new THREE.MeshStandardMaterial({
+                            color: colorHex,
+                            roughness: 0.6, // タイル側面の粗さ
+                            metalness: 0.1 // タイル側面の金属感
+                        });
+
+                        const isTopTile = (i === this.stackData.length - 1) && (j === block.count - 1);
+                        let materials = [sideMaterial, sideMaterial, sideMaterial];
+
+                        // 最上部のタイルのみ、数字テクスチャを適用
+                        if (isTopTile) {
+                            const topTexture = createNumberTexture(block.count, colorHex);
+                            const topMaterial = new THREE.MeshStandardMaterial({
+                                roughness: 0.6,
+                                metalness: 0.1,
+                                map: topTexture
+                            });
+                            materials[1] = topMaterial;
+                            topTextures.push(topTexture); // カメラ回転追従リストに登録
+                        }
+
+                        const mesh = new THREE.Mesh(geometry, materials);
+                        mesh.position.y = currentHeight + (TILE_HEIGHT / 2);
+                        mesh.rotation.y = Math.PI / 6; // マスの六角形形状に合わせる回転
+                        
+                        mesh.castShadow = true;
+                        mesh.receiveShadow = true;
+
+                        group.add(mesh);
+                        currentHeight += TILE_HEIGHT;
+                    }
+                }
+                return group;
+            }
+        }
+
+        /**
+         * 5. シーンの初期化処理
+         * Three.jsの基本コンポーネント（シーン、カメラ、レンダラー、照明）をセットアップします。
+         */
+        function init() {
+            const container = document.getElementById('game-container');
+
+            scene = new THREE.Scene();
+
+            // 透視投影カメラの設定
+            camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 1, 1000); // 視野角, 比率, 前方クリップ, 後方クリップ
+            
+            updateCameraPosition();
+
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            
+            renderer.shadowMap.enabled = true; // シャドウマップを有効化
+            container.appendChild(renderer.domElement);
+
+            // 環境光の設定
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6); // 環境光の強度
+            scene.add(ambientLight);
+
+            // 平行光源の設定（影を生成）
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.6); // 平行光源の強度
+            directionalLight.position.set(10, 20, 10); // 光源の位置
+            directionalLight.castShadow = true;
+            directionalLight.shadow.mapSize.width = 1024; // 影の解像度（幅）
+            directionalLight.shadow.mapSize.height = 1024; // 影の解像度（高さ）
+            scene.add(directionalLight);
+
+            generateField(); // 土台となるフィールドの作成
+            placeInitialStacks(); // テスト用スタックの配置
+
+            // イベントリスナーの登録
+            window.addEventListener('resize', onWindowResize, false);
+            container.addEventListener('pointerdown', onPointerDown, false);
+            window.addEventListener('pointermove', onPointerMove, false);
+            window.addEventListener('pointerup', onPointerUp, false);
+
+            adjustCameraZoom(false); // 初期ズーム調整
+
+            animate(); // アニメーションループ開始
+        }
+
+        /**
+         * 6. フィールド生成処理
+         * 六角形のグリッド（土台）を配置してプレイフィールドを作成します。
+         */
+        function generateField() {
+            const geometry = new THREE.CylinderGeometry(HEX_SIZE - HEX_MARGIN, HEX_SIZE - HEX_MARGIN, HEX_HEIGHT, 6);
+            
+            const material = new THREE.MeshStandardMaterial({ 
+                color: 0xaaaaaa, // 土台の基本色
+                roughness: 0.7, // 土台の粗さ
+                metalness: 0.1 // 土台の金属感
+            });
+
+            for (let q = -MAP_RADIUS; q <= MAP_RADIUS; q++) {
+                const r1 = Math.max(-MAP_RADIUS, -q - MAP_RADIUS);
+                const r2 = Math.min(MAP_RADIUS, -q + MAP_RADIUS);
+                
+                for (let r = r1; r <= r2; r++) {
+                    const tileData = {
+                        q: q,
+                        r: r,
+                        state: 'empty',
+                        stack: []
+                    };
+                    hexGridData.push(tileData);
+
+                    const pos = axialToWorld(q, r, HEX_SIZE);
+                    const hexMesh = new THREE.Mesh(geometry, material);
+                    hexMesh.rotation.y = Math.PI / 6; // 頂点が上に来る向きへ回転
+                    hexMesh.position.set(pos.x, -HEX_HEIGHT / 2, pos.z);
+                    hexMesh.receiveShadow = true;
+                    hexMesh.castShadow = true;
+                    scene.add(hexMesh);
+                }
+            }
+        }
+
+        /**
+         * 7. 初期スタック配置処理
+         * ゲーム開始時にいくつかのタイルスタックをフィールド上に配置します。
+         */
+        function placeInitialStacks() {
+            const testPositions = [
+                { q: 0, r: 0 },
+                { q: 1, r: -1 },
+                { q: -1, r: 1 },
+                { q: 0, r: -1 }
+            ];
+
+            testPositions.forEach(pos => {
+                const tileData = hexGridData.find(t => t.q === pos.q && t.r === pos.r);
+                if (tileData) {
+                    const stack = new TileStack();
+                    const worldPos = axialToWorld(pos.q, pos.r, HEX_SIZE);
+                    
+                    stack.meshGroup.position.set(worldPos.x, 0, worldPos.z);
+                    scene.add(stack.meshGroup);
+                    
+                    tileData.state = 'filled';
+                    tileData.stack = stack.stackData;
+                }
+            });
+            
+            updateCameraPosition(); // 配置後に一度テクスチャ向きを更新
+        }
+
+        /**
+         * 8. カメラ座標・テクスチャ回転更新処理
+         * 方位角と距離に基づいてカメラの3D座標を更新し、
+         * 同時にタイル上の数字が常にカメラ（ユーザー）の正面を向くように回転を補正します。
+         */
+        function updateCameraPosition() {
+            // 球面座標系からデカルト座標系への変換によるカメラ位置決定
+            camera.position.x = cameraParams.distance * Math.sin(CAMERA_POLAR) * Math.sin(cameraParams.azimuth);
+            camera.position.y = cameraParams.distance * Math.cos(CAMERA_POLAR);
+            camera.position.z = cameraParams.distance * Math.sin(CAMERA_POLAR) * Math.cos(cameraParams.azimuth);
+            
+            camera.lookAt(0, 0, 0);
+
+            // 全ての数字テクスチャをカメラの向きに合わせて回転させる
+            // 基礎メッシュの回転(PI/6)を打ち消し、カメラの方位角(azimuth)に同期。
+            // さらに数字が横を向かないよう Math.PI / 2 (90度) 加算して正面へ補正。
+            topTextures.forEach(tex => {
+                tex.rotation = cameraParams.azimuth - Math.PI / 6 + Math.PI / 2;
+            });
+        }
+
+        /**
+         * 9. ズーム自動調整処理
+         * フィールドのサイズと画面のアスペクト比に合わせて、カメラの距離を最適化します。
+         */
+        function adjustCameraZoom(animateFlag = true) {
+            const fieldRadius = MAP_RADIUS * HEX_SIZE * 1.5; // フィールドの概算半径
+            const fov = camera.fov * (Math.PI / 180); // 視野角のラジアン
+            const aspect = camera.aspect;
+            
+            // 縦方向と横方向、それぞれに必要な距離を算出
+            const distanceHeight = fieldRadius / Math.tan(fov / 2);
+            const distanceWidth = (fieldRadius / aspect) / Math.tan(fov / 2);
+            
+            const targetDistance = Math.max(distanceHeight, distanceWidth) * ZOOM_MARGIN; 
+
+            if (animateFlag) {
+                gsap.to(cameraParams, {
+                    distance: targetDistance,
+                    duration: 0.8, // ズームアニメーションの時間秒
+                    ease: "power2.out",
+                    onUpdate: updateCameraPosition
+                });
+            } else {
+                cameraParams.distance = targetDistance;
+                updateCameraPosition();
+            }
+        }
+
+        /**
+         * 10. インタラクション：ポインター押下処理
+         */
+        function onPointerDown(event) {
+            isDragging = true;
+            previousPointerX = event.clientX;
+            previousPointerY = event.clientY;
+            
+            gsap.killTweensOf(cameraParams); // スナップ等の実行中アニメーションを中断
+        }
+
+        /**
+         * 11. インタラクション：ポインター移動処理
+         * マウスやスワイプの移動量に応じて、カメラの方位角を変化させます。
+         */
+        function onPointerMove(event) {
+            if (!isDragging) return;
+
+            const deltaX = event.clientX - previousPointerX;
+            cameraParams.azimuth -= deltaX * ROTATION_SPEED;
+
+            updateCameraPosition();
+
+            previousPointerX = event.clientX;
+            previousPointerY = event.clientY;
+        }
+
+        /**
+         * 12. インタラクション：ポインター解放処理
+         * ドラッグ終了後、最も近い60度（六角形の面）の角度にスムーズにスナップさせます。
+         */
+        function onPointerUp() {
+            if (!isDragging) return;
+            isDragging = false;
+
+            const snapAngle = Math.PI / 3; // スナップ単位角度（60度）
+            const targetAzimuth = Math.round(cameraParams.azimuth / snapAngle) * snapAngle;
+
+            gsap.to(cameraParams, {
+                azimuth: targetAzimuth,
+                duration: 0.6, // スナップにかける時間秒
+                ease: "back.out(1.5)", // 弾むようなイージング
+                onUpdate: updateCameraPosition
+            });
+
+            adjustCameraZoom(true);
+        }
+
+        /**
+         * 13. ウィンドウリサイズ対応
+         */
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            
+            adjustCameraZoom(false);
+        }
+
+        /**
+         * 14. メインレンダリングループ
+         * 画面のリフレッシュレートに合わせて描画を繰り返します。
+         */
+        function animate() {
+            requestAnimationFrame(animate);
+            renderer.render(scene, camera);
+        }
+
+        // ページ読み込み完了時に初期化を実行
+        window.onload = init;
+    </script>
+</body>
+</html>

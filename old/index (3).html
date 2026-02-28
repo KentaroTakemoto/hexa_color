@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hex Puzzle Game - Camera System</title>
+    <style>
+        /* 画面全体のレイアウト設定：余白を消し、スクロールを防止 */
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background-color: #C0D6E4; /* 背景色：空色 */
+            user-select: none; /* テキスト選択を無効化 */
+        }
+        /* ゲーム画面を表示するコンテナのサイズ設定 */
+        #game-container {
+            width: 100vw;
+            height: 100vh;
+            touch-action: none; /* スマホでのデフォルトのスクロール/ズーム挙動を抑制 */
+        }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
+</head>
+<body>
+    <div id="game-container"></div>
+
+    <script>
+        // --- 1. グローバル設定とデータ構造の初期化 ---
+        // ゲーム全体で使用する定数や状態を保持する変数を定義します。
+        const HEX_SIZE = 2; // 六角形の中心から頂点までの基本距離
+        const HEX_HEIGHT = 0.5; // マスの厚み（Y軸方向の高さ）
+        const HEX_MARGIN = 0.1; // マス同士の隙間の大きさ
+        const MAP_RADIUS = 2; // フィールドの層数（中心から外側への周回数）
+        
+        // カメラ制御用パラメータ
+        let cameraAzimuth = Math.PI / 6; // 現在の方位角（ラジアン）
+        const CAMERA_POLAR = Math.PI / 3.5; // 仰角を固定（約51度：フィールドを見下ろす最適な角度）
+        let cameraDistance = 40; // カメラから中心までの距離（初期値）
+        const ROTATION_SPEED = 0.008; // ドラッグ時の回転感度
+        const ZOOM_MARGIN = 2.2; // フィールドが画面に収まる際の距離の倍率（大きいほど小さく表示される）
+        
+        // マウス/タッチ操作の状態管理
+        let isDragging = false; // ドラッグ中かどうかのフラグ
+        let previousPointerX = 0; // 直前のポインターのX座標
+        let previousPointerY = 0; // 直前のポインターのY座標
+
+        let scene, camera, renderer;
+        let hexGridData = []; // 各マスの状態（座標、スタック等）を保持する配列
+
+        // --- 軸座標系 (q, r) から 3D空間のワールド座標 (x, z) への変換関数 ---
+        // 六角形グリッド（Flat-topped型）の幾何学計算に基づき、中心座標を算出します。
+        function axialToWorld(q, r, size) {
+            const x = size * (3/2) * q;
+            const z = size * (Math.sqrt(3)/2) * q + size * Math.sqrt(3) * r;
+            return { x, z };
+        }
+
+        // --- 2. Three.js シーンの構築 ---
+        // 3D空間、カメラ、レンダラー、照明をセットアップし、ゲームの基盤を作ります。
+        function init() {
+            const container = document.getElementById('game-container');
+
+            // 3Dオブジェクトを配置するシーンの作成
+            scene = new THREE.Scene();
+
+            // 遠近感のあるカメラの作成
+            camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 1, 1000);
+            
+            // 初期のカメラ位置を計算して反映
+            updateCameraPosition();
+
+            // WebGLレンダラーの作成（アンチエイリアス有効、背景透過許可）
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer.setSize(window.innerWidth, window.innerHeight); // 描画サイズをウィンドウに合わせる
+            renderer.setPixelRatio(window.devicePixelRatio); // 解像度設定
+            
+            // 影のレンダリング設定を有効化
+            renderer.shadowMap.enabled = true;
+            container.appendChild(renderer.domElement);
+
+            // 環境光：全体を均等に照らし、暗部を底上げする
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6); // 色, 強度
+            scene.add(ambientLight);
+
+            // 平行光源：特定の方向から照らし、影を生成する
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.6); // 色, 強度
+            directionalLight.position.set(10, 20, 10); // 光源の配置位置
+            directionalLight.castShadow = true; // 影を落とす設定
+            // 影の品質（マップサイズ）設定
+            directionalLight.shadow.mapSize.width = 1024;
+            directionalLight.shadow.mapSize.height = 1024;
+            scene.add(directionalLight);
+
+            // フィールド（六角形グリッド）を生成
+            generateField();
+
+            // イベントリスナーの登録（ウィンドウリサイズおよびポインター操作）
+            window.addEventListener('resize', onWindowResize, false);
+            container.addEventListener('pointerdown', onPointerDown, false);
+            window.addEventListener('pointermove', onPointerMove, false);
+            window.addEventListener('pointerup', onPointerUp, false);
+
+            // 初回のズーム調整を実行
+            adjustCameraZoom(false);
+
+            // 描画ループの開始
+            animate();
+        }
+
+        // --- 3. 六角形フィールドの生成 ---
+        // 軸座標系に基づいてループを行い、指定された範囲にタイル（マス）を配置します。
+        function generateField() {
+            const geometry = new THREE.CylinderGeometry(HEX_SIZE - HEX_MARGIN, HEX_SIZE - HEX_MARGIN, HEX_HEIGHT, 6);
+            
+            const material = new THREE.MeshStandardMaterial({ 
+                color: 0xaaaaaa, // タイルの基本色（グレー）
+                roughness: 0.7, // 表面の粗さ
+                metalness: 0.1 // 金属感
+            });
+
+            for (let q = -MAP_RADIUS; q <= MAP_RADIUS; q++) {
+                const r1 = Math.max(-MAP_RADIUS, -q - MAP_RADIUS);
+                const r2 = Math.min(MAP_RADIUS, -q + MAP_RADIUS);
+                
+                for (let r = r1; r <= r2; r++) {
+                    const tileData = {
+                        q: q,
+                        r: r,
+                        state: 'empty',
+                        stack: []
+                    };
+                    hexGridData.push(tileData);
+
+                    const pos = axialToWorld(q, r, HEX_SIZE);
+                    const hexMesh = new THREE.Mesh(geometry, material);
+                    hexMesh.rotation.y = Math.PI / 6;
+                    hexMesh.position.set(pos.x, -HEX_HEIGHT / 2, pos.z);
+                    hexMesh.receiveShadow = true;
+                    hexMesh.castShadow = true;
+                    scene.add(hexMesh);
+                }
+            }
+        }
+
+        // --- 4. カメラの幾何学的更新 ---
+        // 方位角(Azimuth)、固定された仰角(CAMERA_POLAR)、距離(Distance)からカメラの3D座標を算出します。
+        function updateCameraPosition() {
+            // 球面座標系からデカルト座標系への変換
+            camera.position.x = cameraDistance * Math.sin(CAMERA_POLAR) * Math.sin(cameraAzimuth);
+            camera.position.y = cameraDistance * Math.cos(CAMERA_POLAR);
+            camera.position.z = cameraDistance * Math.sin(CAMERA_POLAR) * Math.cos(cameraAzimuth);
+            
+            // カメラを常にフィールドの中心（原点）に向ける
+            camera.lookAt(0, 0, 0);
+        }
+
+        // --- 5. フィールドサイズに基づくカメラ距離の自動調整 ---
+        // フィールド全体が画面内に適切に収まるように、カメラの距離を計算します。
+        // フィールドがはみ出ないよう、ZOOM_MARGINを用いて少し引き気味（約半分程度の大きさ）に調整します。
+        function adjustCameraZoom(animateFlag = true) {
+            // フィールドの最大範囲を推定（最外周のタイルの位置）
+            const fieldRadius = MAP_RADIUS * HEX_SIZE * 1.5; 
+            
+            // カメラの視野角(FOV)とアスペクト比を考慮して距離を算出
+            const fov = camera.fov * (Math.PI / 180);
+            const aspect = camera.aspect;
+            
+            // 縦横どちらの方向でもフィールドが収まるために必要な距離を計算
+            const distanceHeight = fieldRadius / Math.tan(fov / 2);
+            const distanceWidth = (fieldRadius / aspect) / Math.tan(fov / 2);
+            
+            // 余裕を持たせたマージンを適用してターゲット距離を決定
+            const targetDistance = Math.max(distanceHeight, distanceWidth) * ZOOM_MARGIN; 
+
+            if (animateFlag) {
+                gsap.to(window, {
+                    cameraDistance: targetDistance,
+                    duration: 0.8,
+                    ease: "power2.out",
+                    onUpdate: updateCameraPosition
+                });
+            } else {
+                cameraDistance = targetDistance;
+                updateCameraPosition();
+            }
+        }
+
+        // --- 6. 入力イベント：ポインター押し込み ---
+        // ドラッグ操作の開始を検知し、位置を記録します。
+        function onPointerDown(event) {
+            isDragging = true;
+            previousPointerX = event.clientX;
+            previousPointerY = event.clientY;
+        }
+
+        // --- 7. 入力イベント：ポインター移動 ---
+        // ドラッグ中にカメラの方位角（水平回転）のみを更新します。
+        // 仕様に基づき、見下ろす角度（仰角）は固定のまま、フィールドの向きだけを変化させます。
+        function onPointerMove(event) {
+            if (!isDragging) return;
+
+            const deltaX = event.clientX - previousPointerX;
+
+            // X軸の移動量に応じて方位角（水平向き）のみを更新
+            cameraAzimuth -= deltaX * ROTATION_SPEED;
+
+            updateCameraPosition();
+
+            previousPointerX = event.clientX;
+            previousPointerY = event.clientY;
+        }
+
+        // --- 8. 入力イベント：ポインター離し（スナップ処理） ---
+        // ドラッグ終了時、最も近い60度刻み（PI/3）の角度に方位角を自動でスナップさせます。
+        // 同時に、リサイズ等の影響を考慮してズーム率も最適化します。
+        function onPointerUp() {
+            if (!isDragging) return;
+            isDragging = false;
+
+            // 60度(PI/3)単位で最も近い角度を計算
+            const snapAngle = Math.PI / 3; // 60度のラジアン値
+            const targetAzimuth = Math.round(cameraAzimuth / snapAngle) * snapAngle;
+
+            // GSAPを使用して方位角をスムーズにターゲット位置へ吸い寄せ
+            gsap.to(window, {
+                cameraAzimuth: targetAzimuth,
+                duration: 0.6,
+                ease: "back.out(1.5)", // 弾力のある動きでスナップ感を演出
+                onUpdate: updateCameraPosition
+            });
+
+            // ドラッグ終了に合わせて画面への収まりを再調整
+            adjustCameraZoom(true);
+        }
+
+        // --- ウィンドウリサイズ時の処理 ---
+        // 画面サイズ変更に合わせてカメラのアスペクト比とズーム率を更新します。
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            
+            // リサイズ後、常にフィールドが適切な大きさで収まるように調整
+            adjustCameraZoom(false);
+        }
+
+        // --- アニメーションループ ---
+        // 描画を継続的に更新します。
+        function animate() {
+            requestAnimationFrame(animate);
+            renderer.render(scene, camera);
+        }
+
+        // ページ読み込み完了時に初期化
+        window.onload = init;
+    </script>
+</body>
+</html>

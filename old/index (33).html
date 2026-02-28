@@ -1,0 +1,1781 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hex Puzzle Game - Score & Game Cycle</title>
+    <style>
+/**
+ * コメント記述ルール
+ * 追加実装・修正された部分には適切にコメントを追加し、あとから実装の意図がわかる状態にしておくこと
+ * 特に全ての関数、コードブロック単位に関して、どういった処理を意図しているのかというコメントを、該当部の冒頭に記述しておくこと
+ * 人間が調整する可能性があると判断されるパラメータを定義・設定している行については、必ず行の右側にどういった変数であるかのコメントを付けること
+ * 同じファイルをベースに開発を続けるので、コメントに特定の語句を入れないこと
+ */
+
+        /* 画面全体のレイアウト設定：余白を消し、スクロールを防止 */
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background-color: #C0D6E4; /* 画面全体の背景色：空色 */
+            user-select: none; /* テキスト選択を無効化 */
+            font-family: 'Arial', sans-serif;
+        }
+
+        /* 3Dレンダリングを行うキャンバスコンテナの設定 */
+        #game-container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            z-index: 5;
+            touch-action: none;
+        }
+        
+        /* ステージ情報表示用UIの設定 */
+        #stage-info-container {
+            position: absolute;
+            top: 15px;
+            left: 50%;
+            transform: translateX(-50%);
+            background-color: rgba(255, 255, 255, 0.9);
+            padding: 8px 25px;
+            border-radius: 15px;
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
+            z-index: 10;
+            font-size: 18px;
+            font-weight: bold;
+            color: #333;
+            pointer-events: none;
+        }
+
+        /* スコア表示用UIの設定 */
+        #score-container {
+            position: absolute;
+            top: 60px;
+            left: 50%;
+            transform: translateX(-50%);
+            background-color: rgba(255, 255, 255, 0.8); /* 半透明の白背景 */
+            padding: 10px 30px; /* スコア枠の内側余白 */
+            border-radius: 20px; /* 角丸設定 */
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1); /* 軽い影 */
+            z-index: 10; /* 最前面に表示 */
+            font-size: 24px;
+            font-weight: bold;
+            color: #333;
+            pointer-events: none; /* クリックを透過 */
+        }
+
+        /* ミッション進行状況表示用UIの設定 */
+        #mission-container {
+            position: absolute;
+            top: 125px; /* スコア表示の下に配置 */
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            gap: 10px; /* アイコン間の余白 */
+            z-index: 10;
+            pointer-events: none; /* クリックを透過 */
+        }
+
+        /* 個別のミッションアイテムのスタイル設定 */
+        .mission-item {
+            background-color: rgba(255, 255, 255, 0.9);
+            padding: 6px 12px;
+            border-radius: 12px;
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
+            font-size: 16px;
+            font-weight: bold;
+            color: #333;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        /* リセットボタンの設定 */
+        #reset-btn {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            width: 50px;
+            height: 50px;
+            border-radius: 25px;
+            background-color: #ff4c4c; /* 注意を促す赤色 */
+            color: white;
+            border: none;
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.2);
+            font-size: 24px;
+            cursor: pointer;
+            z-index: 10;
+        }
+
+        /* 補充用の3つの山を表示する下部UI領域のレイアウト設定 */
+        #ui-container {
+            position: absolute;
+            bottom: 40px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            gap: 50px;
+            padding: 20px 45px;
+            background-color: #8CA0B8;
+            border-radius: 40px;
+            border: 6px solid #75879C;
+            box-shadow: 0 8px 0 rgba(0, 0, 0, 0.15);
+            z-index: 1;
+            pointer-events: none;
+        }
+        
+        /* 各スロット（山の置き場）のスタイル設定 */
+        .slot {
+            width: 90px;
+            height: 90px;
+            background-color: rgba(0, 0, 0, 0.12);
+            border-radius: 20px;
+            box-shadow: inset 0 4px 4px rgba(0, 0, 0, 0.2);
+        }
+
+        /* ゲームオーバー・レベルクリア時のモーダル共通設定 */
+        .modal-overlay {
+            display: none; /* 初期状態は非表示 */
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background-color: rgba(0, 0, 0, 0.6); /* 背景を暗くする */
+            z-index: 100; /* 全ての要素の上に配置 */
+            justify-content: center;
+            align-items: center;
+            flex-direction: column;
+            color: white;
+            text-align: center;
+        }
+
+        /* モーダル内のコンテンツ設定 */
+        .modal-content {
+            background-color: #fff;
+            color: #333;
+            padding: 40px;
+            border-radius: 30px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+        }
+
+        /* アクションボタンの共通スタイル */
+        .action-btn {
+            margin-top: 20px;
+            padding: 10px 30px;
+            font-size: 18px;
+            font-weight: bold;
+            color: white;
+            border: none;
+            border-radius: 10px;
+            cursor: pointer;
+        }
+
+        /* 各種ボタンの個別色設定 */
+        #restart-btn {
+            background-color: #ff851b; /* リretryを示すオレンジ */
+        }
+        #next-stage-btn {
+            background-color: #2ECC40; /* 成功・進行を示す緑 */
+        }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
+</head>
+<body>
+    <div id="stage-info-container">STAGE <span id="stage-val">1</span> | TARGET <span id="target-val">100</span></div>
+    <div id="score-container">SCORE: <span id="score-val">0</span></div>
+    <div id="mission-container"></div>
+    <button id="reset-btn" onclick="confirmReset()">🔄</button>
+    
+    <div id="game-container"></div>
+    
+    <div id="ui-container">
+        <div class="slot" id="slot-0"></div>
+        <div class="slot" id="slot-1"></div>
+        <div class="slot" id="slot-2"></div>
+    </div>
+
+    <div id="game-over-modal" class="modal-overlay">
+        <div class="modal-content">
+            <h1>Game Over</h1>
+            <p>最終スコア: <span id="final-score">0</span></p>
+            <button id="restart-btn" class="action-btn" onclick="resetGame()">最初から再挑戦</button>
+        </div>
+    </div>
+
+    <div id="level-clear-modal" class="modal-overlay">
+        <div class="modal-content">
+            <h1>Level Cleared!</h1>
+            <p>ステージ <span id="cleared-stage-val">1</span> をクリアしました！</p>
+            <button id="next-stage-btn" class="action-btn" onclick="nextStage()">次のステージへ</button>
+        </div>
+    </div>
+
+    <script>
+        /**
+         * ゲーム定数およびパラメータ定義
+         */
+        const HEX_SIZE = 2; // 六角形の中心から頂点までの基本距離                                  
+        const HEX_HEIGHT = 0.5; // 土台マスの厚み（Y軸方向の高さ）                                
+        const HEX_MARGIN = 0.1; // マス同士の隙間の大きさ                                          
+        const MAP_RADIUS = 2; // フィールドの層数（中心から外側への周回数）                         
+        
+        const cameraParams = {
+            azimuth: Math.PI / 6, // 現在の方位角（ラジアン）                                      
+            distance: 40 // カメラから中心までの距離（初期値）                                      
+        };
+
+        const CAMERA_POLAR = Math.PI / 6; // カメラの仰角（固定）                                  
+        const ROTATION_SPEED = 0.008; // ドラッグ時の回転感度                                      
+        const ZOOM_MARGIN = 2.2; // フィールドが画面に収まる際の距離の倍率                         
+        
+        const TILE_HEIGHT = 0.35; // タイル本体の厚み                                              
+        const TILE_RIM_HEIGHT = 0.1; // タイル底面のフチの厚み                                     
+        const TILE_GAP = 0.06; // タイル同士の垂直方向の隙間                                       
+        const TILE_RADIUS = HEX_SIZE * 0.85; // タイル上面の半径                                   
+        const TILE_BOTTOM_SCALE = 1.05; // タイル底面のテーパー倍率                                
+        
+        const DRAG_Y_OFFSET = 2.0; // ドラッグ中にタイルを浮かせる高さ                             
+
+        const MERGE_ANIM_DURATION = 0.4; // 結合時の水平移動アニメーション時間                     
+        const MERGE_ANIM_DELAY = 0.08; // 結合時の複数タイルの移動開始のズレ時間                   
+
+        const CLEAR_THRESHOLD = 10; // 消滅が発生するタイルの最小枚数                              
+
+        const SCORE_STEP = 100; // ステージ進行時に加算される目標スコアの最小値                    
+        const MAX_SCORE_STEP = 400; // ステージ進行時に加算される目標スコアの最大値                
+
+        const HEX_DIRECTIONS = [
+            { q: 1, r: 0 }, { q: 1, r: -1 }, { q: 0, r: -1 },
+            { q: -1, r: 0 }, { q: -1, r: 1 }, { q: 0, r: 1 }
+        ];
+
+        const TILE_COLORS = {
+            red: 0xFF4136,
+            blue: 0x0074D9,
+            green: 0x2ECC40,
+            yellow: 0xFFDC00,
+            purple: 0xB10DC9,
+            cyan: 0x7FDBFF
+        };
+
+        const TILE_TYPE_NORMAL = 'normal'; // 通常のマス
+        const TILE_TYPE_OBSTACLE = 'obstacle'; // 障害マス（木箱）
+        const TILE_TYPE_FLOWERBED = 'flowerbed'; // 花壇マス
+        const TILE_TYPE_ICE = 'ice'; // 氷マス
+        const TILE_TYPE_LOCKED = 'locked'; // アンロックマス
+
+        const MAX_HP_OBSTACLE = 3; // 障害マスの最大耐久力（破壊に必要な隣接消滅回数）
+        const MAX_HP_FLOWERBED = 3; // 花壇マスの目標値（完了に必要な隣接消滅回数）
+        const MAX_HP_ICE = 3; // 氷マスの解凍に必要な隣接消滅回数
+
+        /**
+         * グローバル変数の宣言
+         */
+        let isDragging = false; // カメラ回転用のドラッグ中フラグ                                   
+        let isLogicProcessing = false; // 結合・消滅アニメーション実行中のフラグ                   
+        let forceCompleteLogic = null; // 進行中のアニメーションを強制完了させるための関数
+        let previousPointerX = 0; // 直前のポインターのX座標                                       
+        let previousPointerY = 0; // 直前のポインターのY座標                                       
+        
+        let score = 0; // 現在のプレイヤーのスコア                                                 
+        let currentStage = 1; // プレイヤーの現在の到達ステージ                                     
+        let targetScore = 100; // ステージ1の目標スコアを100に固定設定                             
+        let isLevelCleared = false; // レベルクリア演出の待機状態を示すフラグ                     
+        let initialMissions = { obstacle: 0, flowerbed: 0, ice: 0, locked: 0 }; // 各ステージの初期ミッション数
+
+        let currentPlacedTile = null; // プレイヤーが直近にタイルを配置した座標（シミュレーション評価用）
+
+        let scene, camera, renderer;
+        let hexGridData = []; 
+        let hexMeshes = []; 
+        let topTextures = []; 
+
+        let raycaster = new THREE.Raycaster(); 
+        let mouse = new THREE.Vector2(); 
+        let draggedStack = null; 
+        let trayStacks = [null, null, null]; 
+        let trayOriginalPositions = []; 
+
+        /**
+         * 座標変換：軸座標(q, r)をワールド座標(x, z)に変換する
+         */
+        function axialToWorld(q, r, size) {
+            const x = size * (3/2) * q;
+            const z = size * (Math.sqrt(3)/2) * q + size * Math.sqrt(3) * r;
+            return { x, z };
+        }
+
+        /**
+         * テクスチャ生成：数字が描かれたCanvasテクスチャを作成する
+         */
+        function createNumberTexture(number, colorHex) {
+            const canvas = document.createElement('canvas');
+            canvas.width = 256; 
+            canvas.height = 256; 
+            const ctx = canvas.getContext('2d');
+
+            ctx.fillStyle = '#' + colorHex.toString(16).padStart(6, '0');
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            ctx.fillStyle = '#ffffff'; 
+            ctx.font = 'bold 120px Arial'; 
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            
+            ctx.strokeStyle = '#000000';
+            ctx.lineWidth = 6;
+            ctx.strokeText(number, canvas.width / 2, canvas.height / 2);
+            ctx.fillText(number, canvas.width / 2, canvas.height / 2);
+
+            const texture = new THREE.CanvasTexture(canvas);
+            texture.center.set(0.5, 0.5); 
+            return texture;
+        }
+
+        /**
+         * テクスチャ生成：南京錠とアンロック用スコアが描かれたCanvasテクスチャを作成する
+         */
+        function createLockedTileTexture(unlockScore) {
+            const canvas = document.createElement('canvas');
+            canvas.width = 256;
+            canvas.height = 256;
+            const ctx = canvas.getContext('2d');
+
+            // 背景：暗いグレーでロック状態を表現
+            ctx.fillStyle = '#333333';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // 南京錠アイコンの描画（絵文字を利用）
+            ctx.font = '80px Arial';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText('🔒', canvas.width / 2, canvas.height / 2 - 25);
+
+            // アンロックに必要なスコアの描画
+            ctx.fillStyle = '#ffffff';
+            ctx.font = 'bold 55px Arial';
+            ctx.fillText(unlockScore, canvas.width / 2, canvas.height / 2 + 65);
+
+            const texture = new THREE.CanvasTexture(canvas);
+            texture.center.set(0.5, 0.5);
+            return texture;
+        }
+
+        /**
+         * 判定：特別マスのミッションクリア条件を満たしているか確認する
+         * 全ての特別マスが処理完了（破壊・解除・花開開花）状態になっているかを判定する
+         */
+        function checkMissionComplete() {
+            for (let t of hexGridData) {
+                if (t.type === TILE_TYPE_OBSTACLE) return false;
+                if (t.type === TILE_TYPE_ICE) return false;
+                if (t.type === TILE_TYPE_LOCKED) return false;
+                if (t.type === TILE_TYPE_FLOWERBED && !t.missionCompleted) return false;
+            }
+            return true;
+        }
+
+        /**
+         * UI更新：ミッションの進行状況を画面に表示する
+         */
+        function updateMissionUI() {
+            const container = document.getElementById('mission-container');
+            if (!container) return;
+            
+            let currentObstacle = 0;
+            let currentFlowerbed = 0;
+            let currentIce = 0;
+            let currentLocked = 0;
+
+            // 現在盤面に残っている未完了の各特別マスをカウント
+            hexGridData.forEach(t => {
+                if (t.type === TILE_TYPE_OBSTACLE) currentObstacle++;
+                if (t.type === TILE_TYPE_FLOWERBED && !t.missionCompleted) currentFlowerbed++;
+                if (t.type === TILE_TYPE_ICE) currentIce++;
+                if (t.type === TILE_TYPE_LOCKED) currentLocked++;
+            });
+
+            let html = '';
+
+            // 各ミッションが存在する場合のみアイコンと「達成数/初期数」を描画する
+            if (initialMissions.obstacle > 0) {
+                html += `<div class="mission-item">📦 ${initialMissions.obstacle - currentObstacle}/${initialMissions.obstacle}</div>`;
+            }
+            if (initialMissions.flowerbed > 0) {
+                html += `<div class="mission-item">🌺 ${initialMissions.flowerbed - currentFlowerbed}/${initialMissions.flowerbed}</div>`;
+            }
+            if (initialMissions.ice > 0) {
+                html += `<div class="mission-item">🧊 ${initialMissions.ice - currentIce}/${initialMissions.ice}</div>`;
+            }
+            if (initialMissions.locked > 0) {
+                html += `<div class="mission-item">🔒 ${initialMissions.locked - currentLocked}/${initialMissions.locked}</div>`;
+            }
+
+            container.innerHTML = html;
+        }
+
+        /**
+         * UI更新：現在のスコアを画面表示に反映し、クリア条件の判定とロック解除を行う
+         */
+        function updateScore(points) {
+            score += points;
+            document.getElementById('score-val').innerText = score;
+
+            // スコア上昇に伴うアンロックマスの解除判定
+            let lockedCleared = false;
+            hexGridData.forEach(t => {
+                if (t.type === TILE_TYPE_LOCKED && score >= t.unlockScore) {
+                    t.type = TILE_TYPE_NORMAL;
+                    t.state = 'empty';
+                    rebuildTileMesh(t);
+                    lockedCleared = true;
+                }
+            });
+            
+            if (lockedCleared) {
+                updateMissionUI();
+            }
+            
+            if (score >= targetScore && checkMissionComplete()) {
+                isLevelCleared = true;
+            }
+        }
+
+        /**
+         * ロジック：タイルの枚数と色構成をランダムに決定する
+         */
+        function generateRandomStackData() {
+            const totalCount = Math.floor(Math.random() * 8) + 2; 
+            const maxColors = Math.min(3, totalCount); 
+            const colorCount = Math.floor(Math.random() * maxColors) + 1; 
+
+            const colors = Object.keys(TILE_COLORS);
+            const selectedColors = [];
+            
+            while (selectedColors.length < colorCount) {
+                const color = colors[Math.floor(Math.random() * colors.length)];
+                if (!selectedColors.includes(color)) {
+                    selectedColors.push(color);
+                }
+            }
+
+            const stackData = [];
+            let remaining = totalCount;
+            
+            for (let i = 0; i < colorCount; i++) {
+                if (i === colorCount - 1) {
+                    stackData.push({ color: selectedColors[i], count: remaining });
+                } else {
+                    const maxForThis = remaining - (colorCount - 1 - i);
+                    const count = Math.floor(Math.random() * maxForThis) + 1;
+                    stackData.push({ color: selectedColors[i], count: count });
+                    remaining -= count;
+                }
+            }
+            return stackData;
+        }
+
+        /**
+         * 描画補助：スタックデータに基づいてメッシュグループを構築する
+         * 氷マスの内部描画と通常マスの描画で共通利用する
+         */
+        function createStackMeshGroup(stackData) {
+            const group = new THREE.Group();
+            let currentHeight = 0;
+
+            const bodyGeometry = new THREE.CylinderGeometry(TILE_RADIUS, TILE_RADIUS * TILE_BOTTOM_SCALE, TILE_HEIGHT, 6);
+            const rimGeometry = new THREE.CylinderGeometry(TILE_RADIUS * TILE_BOTTOM_SCALE, TILE_RADIUS * TILE_BOTTOM_SCALE * 1.02, TILE_RIM_HEIGHT, 6);
+
+            for (let i = 0; i < stackData.length; i++) {
+                const block = stackData[i];
+                const colorHex = TILE_COLORS[block.color];
+
+                for (let j = 0; j < block.count; j++) {
+                    const tileGroup = new THREE.Group();
+
+                    const rimColor = new THREE.Color(colorHex).multiplyScalar(0.4);
+                    const rimMaterial = new THREE.MeshStandardMaterial({ color: rimColor, roughness: 0.8 });
+                    const rimMesh = new THREE.Mesh(rimGeometry, rimMaterial);
+                    rimMesh.position.y = TILE_RIM_HEIGHT / 2;
+                    rimMesh.rotation.y = Math.PI / 6;
+                    tileGroup.add(rimMesh);
+
+                    const sideMaterial = new THREE.MeshStandardMaterial({
+                        color: colorHex,
+                        roughness: 0.5,
+                        metalness: 0.1
+                    });
+
+                    const isTopTile = (i === stackData.length - 1) && (j === block.count - 1);
+                    let materials = [sideMaterial, sideMaterial, sideMaterial];
+
+                    if (isTopTile) {
+                        const topTexture = createNumberTexture(block.count, colorHex);
+                        topTexture.rotation = cameraParams.azimuth - Math.PI / 6 + Math.PI / 2;
+                        
+                        const topMaterial = new THREE.MeshStandardMaterial({
+                            roughness: 0.5,
+                            metalness: 0.1,
+                            map: topTexture
+                        });
+                        materials[1] = topMaterial;
+                        topTextures.push(topTexture);
+                    }
+
+                    const bodyMesh = new THREE.Mesh(bodyGeometry, materials);
+                    bodyMesh.position.y = TILE_RIM_HEIGHT + (TILE_HEIGHT / 2);
+                    bodyMesh.rotation.y = Math.PI / 6;
+                    tileGroup.add(bodyMesh);
+
+                    tileGroup.position.y = currentHeight;
+                    group.add(tileGroup);
+
+                    currentHeight += (TILE_HEIGHT + TILE_RIM_HEIGHT + TILE_GAP);
+                }
+            }
+            return group;
+        }
+
+        /**
+         * 描画：指定されたマスのデータに基づき、メッシュを再構築し状態を同期する
+         * 特別マスの種類に応じた個別の描画ロジックを含む
+         */
+        function rebuildTileMesh(tileData) {
+            if (tileData.meshGroup) {
+                scene.remove(tileData.meshGroup);
+            }
+            
+            const group = new THREE.Group();
+            let shouldAddGroup = false;
+
+            if (tileData.type === TILE_TYPE_NORMAL) {
+                if (!tileData.stack || tileData.stack.length === 0) {
+                    tileData.state = 'empty';
+                    tileData.meshGroup = null;
+                    return;
+                } else {
+                    tileData.state = 'filled';
+                    const stackGroup = createStackMeshGroup(tileData.stack);
+                    group.add(stackGroup);
+                    shouldAddGroup = true;
+                }
+            } else if (tileData.type === TILE_TYPE_OBSTACLE) {
+                /**
+                 * 障害物（木箱）の見た目構築
+                 */
+                const obsGroup = new THREE.Group();
+                obsGroup.userData.isObstacleGroup = true; // 識別用フラグ
+                
+                const obsHeight = TILE_HEIGHT * 3;
+
+                // 1. ベース（外枠）
+                const baseGeo = new THREE.CylinderGeometry(TILE_RADIUS * 0.9, TILE_RADIUS * 0.9, obsHeight * 0.8, 6);
+                const baseMat = new THREE.MeshStandardMaterial({ color: 0x5c4033, roughness: 0.9 }); // 暗い茶色
+                const baseMesh = new THREE.Mesh(baseGeo, baseMat);
+                baseMesh.position.y = obsHeight * 0.4;
+                baseMesh.rotation.y = Math.PI / 6;
+                obsGroup.add(baseMesh);
+
+                // 2. ベース（内側の底板）
+                const innerGeo = new THREE.CylinderGeometry(TILE_RADIUS * 0.8, TILE_RADIUS * 0.8, obsHeight * 0.82, 6);
+                const innerMat = new THREE.MeshStandardMaterial({ color: 0x8b5a2b, roughness: 0.9 }); // やや明るい茶色
+                const innerMesh = new THREE.Mesh(innerGeo, innerMat);
+                innerMesh.position.y = obsHeight * 0.4;
+                innerMesh.rotation.y = Math.PI / 6;
+                obsGroup.add(innerMesh);
+
+                // 板の共通パラメータ
+                const plankWidth = TILE_RADIUS * 1.7 * 1.1; // はみ出すように少し長め
+                const plankDepth = TILE_RADIUS * 0.35;
+                const plankHeight = obsHeight * 0.15;
+                const plankMat = new THREE.MeshStandardMaterial({ color: 0xa0522d, roughness: 0.9 });
+                
+                const rivetRadius = plankDepth * 0.15;
+                const rivetGeo = new THREE.CylinderGeometry(rivetRadius, rivetRadius, plankHeight * 1.2, 8);
+                const rivetMat = new THREE.MeshStandardMaterial({ color: 0xaaaaaa, roughness: 0.5 });
+
+                // 板を生成するローカル関数
+                function createPlank() {
+                    const plankGroup = new THREE.Group();
+                    const plankMesh = new THREE.Mesh(new THREE.BoxGeometry(plankWidth, plankHeight, plankDepth), plankMat);
+                    plankGroup.add(plankMesh);
+
+                    // 鋲を追加（両端と中央）
+                    const rivetOffset = plankWidth * 0.4;
+                    const rivetY = 0; 
+                    const r1 = new THREE.Mesh(rivetGeo, rivetMat);
+                    r1.position.set(-rivetOffset, rivetY, 0);
+                    const r2 = new THREE.Mesh(rivetGeo, rivetMat);
+                    r2.position.set(rivetOffset, rivetY, 0);
+                    const r3 = new THREE.Mesh(rivetGeo, rivetMat);
+                    r3.position.set(0, rivetY, 0);
+
+                    plankGroup.add(r1, r2, r3);
+                    return plankGroup;
+                }
+
+                // 3. 板2（右上から左下）: HP2で外れる = HP2までは表示、HP1で非表示
+                const plank2 = createPlank();
+                plank2.position.y = obsHeight * 0.8 + plankHeight / 2;
+                plank2.rotation.y = Math.PI / 3; 
+                plank2.name = "plank2";
+                obsGroup.add(plank2);
+
+                // 4. 板1（左上から右下）: HP1で外れる = HP3のみ表示、HP2で非表示
+                const plank1 = createPlank();
+                plank1.position.y = obsHeight * 0.8 + plankHeight * 1.5;
+                plank1.rotation.y = -Math.PI / 3; 
+                plank1.name = "plank1";
+                obsGroup.add(plank1);
+
+                // 耐久力に応じて板の表示を切り替え
+                plank1.visible = (tileData.hp >= 3);
+                plank2.visible = (tileData.hp >= 2);
+
+                group.add(obsGroup);
+                shouldAddGroup = true;
+            } else if (tileData.type === TILE_TYPE_FLOWERBED) {
+                /**
+                 * 花壇の描画：土台を土（茶色）でくりぬき、芽（緑の線）を配置
+                 */
+                const geo = new THREE.CylinderGeometry(TILE_RADIUS, TILE_RADIUS, TILE_HEIGHT, 6);
+                const mat = new THREE.MeshStandardMaterial({ color: 0xDDDDDD, roughness: 0.8 });
+                const mesh = new THREE.Mesh(geo, mat);
+                mesh.position.y = TILE_HEIGHT / 2;
+                mesh.rotation.y = Math.PI / 6;
+                group.add(mesh);
+
+                // 中央の土（暗い茶色の円）
+                const soilGeo = new THREE.CylinderGeometry(TILE_RADIUS * 0.7, TILE_RADIUS * 0.7, 0.05, 16);
+                const soilMat = new THREE.MeshStandardMaterial({ color: 0x3d2b1f, roughness: 1.0 });
+                const soilMesh = new THREE.Mesh(soilGeo, soilMat);
+                soilMesh.position.y = TILE_HEIGHT + 0.01; // 白い土台のわずか上に配置
+                group.add(soilMesh);
+
+                // 3つの小さな芽（細い緑の縦線）
+                const sproutCount = 3;
+                const sproutGeo = new THREE.CylinderGeometry(0.04, 0.04, 0.4, 8);
+                const sproutMat = new THREE.MeshStandardMaterial({ color: 0x32CD32, roughness: 0.8 });
+                for (let i = 0; i < sproutCount; i++) {
+                    const sprout = new THREE.Mesh(sproutGeo, sproutMat);
+                    // 土の上に並べて配置
+                    const offset = (i - 1) * (TILE_RADIUS * 0.25);
+                    sprout.position.set(offset, TILE_HEIGHT + 0.2, 0); 
+                    group.add(sprout);
+                }
+                
+                // 消滅発生時に追加される花（ピンクの球体）
+                const flowersCount = tileData.maxHp - tileData.hp;
+                const flowerGeo = new THREE.SphereGeometry(TILE_RADIUS * 0.35, 16, 16);
+                const flowerMat = new THREE.MeshStandardMaterial({ color: 0xFF69B4, roughness: 0.4 });
+                for(let i=0; i<flowersCount; i++) {
+                    const fMesh = new THREE.Mesh(flowerGeo, flowerMat);
+                    const angle = (Math.PI * 2 / 3) * i;
+                    // 花は芽よりも高い位置(TILE_HEIGHT + 0.35)に配置し、重なりで見えなくなるようにする
+                    fMesh.position.set(Math.cos(angle) * TILE_RADIUS * 0.45, TILE_HEIGHT + 0.35, Math.sin(angle) * TILE_RADIUS * 0.45);
+                    group.add(fMesh);
+                }
+                shouldAddGroup = true;
+            } else if (tileData.type === TILE_TYPE_ICE) {
+                // 氷マスの描画：内部のスタックを描画後、半透明の氷ブロックを被せる
+                const stackGroup = createStackMeshGroup(tileData.frozenStack);
+                group.add(stackGroup);
+
+                const iceGeo = new THREE.CylinderGeometry(TILE_RADIUS * 1.05, TILE_RADIUS * 1.05, TILE_HEIGHT * 4, 6);
+                const opacity = 0.3 + (tileData.hp / tileData.maxHp) * 0.5;
+                const iceMat = new THREE.MeshStandardMaterial({ color: 0xA0E2FF, transparent: true, opacity: opacity, roughness: 0.1 });
+                const iceMesh = new THREE.Mesh(iceGeo, iceMat);
+                iceMesh.position.y = TILE_HEIGHT * 2;
+                iceMesh.rotation.y = Math.PI / 6;
+                group.add(iceMesh);
+                shouldAddGroup = true;
+            } else if (tileData.type === TILE_TYPE_LOCKED) {
+                // アンロックマスの描画：暗い色の土台、南京錠と必要スコアを表示
+                const geo = new THREE.CylinderGeometry(TILE_RADIUS, TILE_RADIUS, TILE_HEIGHT * 1.5, 6);
+                const sideMat = new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.8 });
+                
+                const topTexture = createLockedTileTexture(tileData.unlockScore);
+                // カメラ向きに合わせてテクスチャを回転制御対象に追加
+                topTexture.rotation = cameraParams.azimuth - Math.PI / 6 + Math.PI / 2;
+                const topMat = new THREE.MeshStandardMaterial({ map: topTexture, roughness: 0.8 });
+                topTextures.push(topTexture);
+
+                const materials = [sideMat, topMat, sideMat];
+                const mesh = new THREE.Mesh(geo, materials);
+                mesh.position.y = TILE_HEIGHT * 0.75;
+                mesh.rotation.y = Math.PI / 6;
+                group.add(mesh);
+                shouldAddGroup = true;
+            }
+
+            if (shouldAddGroup) {
+                const worldPos = axialToWorld(tileData.q, tileData.r, HEX_SIZE);
+                group.position.set(worldPos.x, 0, worldPos.z);
+                scene.add(group);
+                tileData.meshGroup = group;
+            }
+        }
+
+        /**
+         * 補助：アニメーション用の一時的なタイル群メッシュを生成する
+         */
+        function createTempMeshes(worldPos, baseHeight, count, colorName) {
+            const meshes = [];
+            const colorHex = TILE_COLORS[colorName];
+            
+            const bodyGeometry = new THREE.CylinderGeometry(TILE_RADIUS, TILE_RADIUS * TILE_BOTTOM_SCALE, TILE_HEIGHT, 6);
+            const rimGeometry = new THREE.CylinderGeometry(TILE_RADIUS * TILE_BOTTOM_SCALE, TILE_RADIUS * TILE_BOTTOM_SCALE * 1.02, TILE_RIM_HEIGHT, 6);
+
+            for (let i = 0; i < count; i++) {
+                const tileGroup = new THREE.Group();
+
+                const rimColor = new THREE.Color(colorHex).multiplyScalar(0.4);
+                const rimMaterial = new THREE.MeshStandardMaterial({ color: rimColor, roughness: 0.8 });
+                const rimMesh = new THREE.Mesh(rimGeometry, rimMaterial);
+                rimMesh.position.y = TILE_RIM_HEIGHT / 2;
+                rimMesh.rotation.y = Math.PI / 6;
+                tileGroup.add(rimMesh);
+
+                const sideMaterial = new THREE.MeshStandardMaterial({ color: colorHex, roughness: 0.5, metalness: 0.1 });
+                let materials = [sideMaterial, sideMaterial, sideMaterial];
+                
+                if (i === count - 1) {
+                    const topTexture = createNumberTexture(count, colorHex);
+                    topTexture.rotation = cameraParams.azimuth - Math.PI / 6 + Math.PI / 2;
+                    const topMaterial = new THREE.MeshStandardMaterial({ roughness: 0.5, metalness: 0.1, map: topTexture });
+                    materials[1] = topMaterial;
+                    topTextures.push(topTexture);
+                }
+
+                const bodyMesh = new THREE.Mesh(bodyGeometry, materials);
+                bodyMesh.position.y = TILE_RIM_HEIGHT + (TILE_HEIGHT / 2);
+                bodyMesh.rotation.y = Math.PI / 6;
+                tileGroup.add(bodyMesh);
+
+                tileGroup.position.set(worldPos.x, baseHeight + i * (TILE_HEIGHT + TILE_RIM_HEIGHT + TILE_GAP), worldPos.z);
+                meshes.push(tileGroup);
+            }
+            return meshes;
+        }
+
+        /**
+         * クラス：TileStack
+         * トレイに存在する「ドラッグ可能なタイルの山」を管理します。
+         */
+        class TileStack {
+            constructor(initialData = null) {
+                this.stackData = initialData ? initialData : generateRandomStackData();
+                this.meshGroup = this.createMeshGroup();
+                this.slotIndex = -1;                     
+            }
+
+            createMeshGroup() {
+                const group = new THREE.Group();
+                let currentHeight = 0; 
+
+                const bodyGeometry = new THREE.CylinderGeometry(TILE_RADIUS, TILE_RADIUS * TILE_BOTTOM_SCALE, TILE_HEIGHT, 6);
+                const rimGeometry = new THREE.CylinderGeometry(TILE_RADIUS * TILE_BOTTOM_SCALE, TILE_RADIUS * TILE_BOTTOM_SCALE * 1.02, TILE_RIM_HEIGHT, 6);
+
+                for (let i = 0; i < this.stackData.length; i++) {
+                    const block = this.stackData[i];
+                    const colorHex = TILE_COLORS[block.color];
+
+                    for (let j = 0; j < block.count; j++) {
+                        const tileGroup = new THREE.Group(); 
+
+                        const rimColor = new THREE.Color(colorHex).multiplyScalar(0.4); 
+                        const rimMaterial = new THREE.MeshStandardMaterial({ color: rimColor, roughness: 0.8 });
+                        const rimMesh = new THREE.Mesh(rimGeometry, rimMaterial);
+                        rimMesh.position.y = TILE_RIM_HEIGHT / 2;
+                        rimMesh.rotation.y = Math.PI / 6;
+                        tileGroup.add(rimMesh);
+
+                        const sideMaterial = new THREE.MeshStandardMaterial({
+                            color: colorHex,
+                            roughness: 0.5,
+                            metalness: 0.1
+                        });
+
+                        const isTopTile = (i === this.stackData.length - 1) && (j === block.count - 1);
+                        let materials = [sideMaterial, sideMaterial, sideMaterial]; 
+
+                        if (isTopTile) {
+                            const topTexture = createNumberTexture(block.count, colorHex);
+                            topTexture.rotation = cameraParams.azimuth - Math.PI / 6 + Math.PI / 2;
+                            const topMaterial = new THREE.MeshStandardMaterial({
+                                roughness: 0.5,
+                                metalness: 0.1,
+                                map: topTexture
+                            });
+                            materials[1] = topMaterial;
+                            topTextures.push(topTexture);
+                        }
+
+                        const bodyMesh = new THREE.Mesh(bodyGeometry, materials);
+                        bodyMesh.position.y = TILE_RIM_HEIGHT + (TILE_HEIGHT / 2);
+                        bodyMesh.rotation.y = Math.PI / 6;
+                        tileGroup.add(bodyMesh);
+
+                        tileGroup.position.y = currentHeight;
+                        group.add(tileGroup);
+
+                        currentHeight += (TILE_HEIGHT + TILE_RIM_HEIGHT + TILE_GAP);
+                    }
+                }
+                
+                group.traverse((child) => {
+                    if (child instanceof THREE.Mesh) child.userData.owner = this;
+                });
+                return group;
+            }
+        }
+
+        /**
+         * セーブ：現在のゲーム状態をlocalStorageに保存する
+         */
+        function saveGame() {
+            if(isLevelCleared || document.getElementById('game-over-modal').style.display === 'flex') return;
+            
+            const gameState = {
+                score: score,
+                currentStage: currentStage,
+                targetScore: targetScore,
+                initialMissions: initialMissions,
+                grid: hexGridData.map(t => ({ 
+                    q: t.q, r: t.r, state: t.state, stack: JSON.parse(JSON.stringify(t.stack)),
+                    type: t.type, hp: t.hp, maxHp: t.maxHp, missionCompleted: t.missionCompleted,
+                    frozenStack: t.frozenStack ? JSON.parse(JSON.stringify(t.frozenStack)) : null,
+                    unlockScore: t.unlockScore
+                })),
+                tray: trayStacks.map(s => s ? { slotIndex: s.slotIndex, stackData: JSON.parse(JSON.stringify(s.stackData)) } : null)
+            };
+            localStorage.setItem('hexPuzzleGameState', JSON.stringify(gameState));
+        }
+
+        /**
+         * ロード：localStorageからゲーム状態を復元する
+         */
+        function loadGame() {
+            const saved = localStorage.getItem('hexPuzzleGameState');
+            if (saved) {
+                try {
+                    const gameState = JSON.parse(saved);
+                    score = gameState.score;
+                    currentStage = gameState.currentStage;
+                    targetScore = gameState.targetScore;
+                    initialMissions = gameState.initialMissions || { obstacle: 0, flowerbed: 0, ice: 0, locked: 0 };
+                    
+                    document.getElementById('score-val').innerText = score;
+                    document.getElementById('stage-val').innerText = currentStage;
+                    document.getElementById('target-val').innerText = targetScore;
+
+                    gameState.grid.forEach(savedTile => {
+                        const tile = hexGridData.find(t => t.q === savedTile.q && t.r === savedTile.r);
+                        if (tile) {
+                            tile.state = savedTile.state;
+                            tile.stack = savedTile.stack;
+                            tile.type = savedTile.type || TILE_TYPE_NORMAL;
+                            tile.hp = savedTile.hp || 0;
+                            tile.maxHp = savedTile.maxHp || 0;
+                            tile.missionCompleted = savedTile.missionCompleted || false;
+                            tile.frozenStack = savedTile.frozenStack || null;
+                            tile.unlockScore = savedTile.unlockScore || 0;
+                            rebuildTileMesh(tile);
+                        }
+                    });
+
+                    gameState.tray.forEach((savedTray, i) => {
+                        if (savedTray) {
+                            const stack = new TileStack(savedTray.stackData);
+                            stack.slotIndex = savedTray.slotIndex;
+                            trayStacks[i] = stack;
+                            trayOriginalPositions[i] = new THREE.Vector3();
+                            scene.add(stack.meshGroup);
+                        } else {
+                            trayStacks[i] = null;
+                        }
+                    });
+                    
+                    updateTrayPositions();
+                    updateMissionUI();
+                    return true;
+                } catch (e) {
+                    console.error("Save data is corrupted", e);
+                    return false;
+                }
+            }
+            return false;
+        }
+
+        /**
+         * 初期化：Three.jsシーンの構築と基本設定を行う
+         */
+        function init() {
+            const container = document.getElementById('game-container');
+
+            scene = new THREE.Scene();
+
+            camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 1, 1000);
+            updateCameraPosition();
+
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            
+            container.appendChild(renderer.domElement);
+
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.8);                      
+            scene.add(ambientLight);
+
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.4);             
+            directionalLight.position.set(10, 20, 10);                                
+            scene.add(directionalLight);
+
+            generateField(); 
+
+            if (!loadGame()) {
+                document.getElementById('target-val').innerText = targetScore; // 初回ターゲットを表示に反映
+                placeSpecialTiles(currentStage);
+                placeInitialStacks(); 
+                refillTray();
+                saveGame();
+            }
+
+            window.addEventListener('resize', onWindowResize, false);
+            container.addEventListener('pointerdown', onPointerDown, false);
+            window.addEventListener('pointermove', onPointerMove, false);
+            window.addEventListener('pointerup', onPointerUp, false);
+            window.addEventListener('keydown', onKeyDown, false);
+
+            adjustCameraZoom(false); 
+
+            animate(); 
+        }
+
+        /**
+         * 生成：フィールド（六角形土台）を配置・初期化する
+         */
+        function generateField() {
+            const geometry = new THREE.CylinderGeometry(HEX_SIZE - HEX_MARGIN, HEX_SIZE - HEX_MARGIN, HEX_HEIGHT, 6);
+            const material = new THREE.MeshStandardMaterial({ color: 0xaaaaaa, roughness: 0.8, metalness: 0.1 });
+
+            for (let q = -MAP_RADIUS; q <= MAP_RADIUS; q++) {
+                const r1 = Math.max(-MAP_RADIUS, -q - MAP_RADIUS);
+                const r2 = Math.min(MAP_RADIUS, -q + MAP_RADIUS);
+                
+                for (let r = r1; r <= r2; r++) {
+                    const pos = axialToWorld(q, r, HEX_SIZE);
+                    const hexMesh = new THREE.Mesh(geometry, material);
+                    hexMesh.rotation.y = Math.PI / 6;                     
+                    hexMesh.position.set(pos.x, -HEX_HEIGHT / 2, pos.z);
+                    
+                    hexMesh.userData.q = q;
+                    hexMesh.userData.r = r;
+                    hexMeshes.push(hexMesh);
+                    scene.add(hexMesh);
+
+                    hexGridData.push({ 
+                        q: q, r: r, state: 'empty', stack: [], meshGroup: null,
+                        type: TILE_TYPE_NORMAL, hp: 0, maxHp: 0, missionCompleted: false, frozenStack: null, unlockScore: 0
+                    });
+                }
+            }
+        }
+
+        /**
+         * ロジック：ステージ進行に応じて特別マス（ミッション）を配置する
+         */
+        function placeSpecialTiles(stage) {
+            // 初期配置マスとして予約されている場所は避ける
+            let availableTiles = hexGridData.filter(t => (t.q !== 0 || t.r !== 0) && (t.q !== 1 || t.r !== -1));
+            availableTiles.sort(() => Math.random() - 0.5);
+
+            let numObstacle = stage >= 2 ? Math.min(Math.floor(stage / 2) + 1, 3) : 0;
+            let numFlowerbed = stage >= 3 ? Math.min(Math.floor(stage / 3), 2) : 0;
+            let numIce = stage >= 4 ? Math.min(Math.floor((stage-1) / 3), 2) : 0;
+            let numLocked = stage >= 5 ? 1 : 0; 
+            
+            // 初期のミッション数を保存しUIを構築
+            initialMissions = {
+                obstacle: numObstacle,
+                flowerbed: numFlowerbed,
+                ice: numIce,
+                locked: numLocked
+            };
+
+            let index = 0;
+            for(let i=0; i<numObstacle && index < availableTiles.length; i++) {
+                let t = availableTiles[index++];
+                t.type = TILE_TYPE_OBSTACLE; t.state = 'special'; t.hp = MAX_HP_OBSTACLE; t.maxHp = MAX_HP_OBSTACLE;
+            }
+            for(let i=0; i<numFlowerbed && index < availableTiles.length; i++) {
+                let t = availableTiles[index++];
+                t.type = TILE_TYPE_FLOWERBED; t.state = 'special'; t.hp = MAX_HP_FLOWERBED; t.maxHp = MAX_HP_FLOWERBED;
+            }
+            for(let i=0; i<numIce && index < availableTiles.length; i++) {
+                let t = availableTiles[index++];
+                t.type = TILE_TYPE_ICE; t.state = 'special'; t.hp = MAX_HP_ICE; t.maxHp = MAX_HP_ICE;
+                t.frozenStack = generateRandomStackData(); 
+            }
+            for(let i=0; i<numLocked && index < availableTiles.length; i++) {
+                let t = availableTiles[index++];
+                t.type = TILE_TYPE_LOCKED; t.state = 'special'; 
+                t.unlockScore = score + Math.min(stage * 200, 1000); 
+            }
+            
+            hexGridData.forEach(t => {
+                if(t.type !== TILE_TYPE_NORMAL) rebuildTileMesh(t);
+            });
+
+            updateMissionUI();
+        }
+
+        /**
+         * トレイ：補充用スタックが空の場合、新しい3つの山を生成する
+         */
+        function refillTray() {
+            for (let i = 0; i < 3; i++) {
+                const stack = new TileStack();
+                stack.slotIndex = i;
+                trayStacks[i] = stack;
+                trayOriginalPositions[i] = new THREE.Vector3(); 
+                
+                stack.meshGroup.position.set(20, -10, 0); 
+                scene.add(stack.meshGroup);
+            }
+            
+            updateTrayPositions();
+
+            trayStacks.forEach((stack, i) => {
+                const targetPos = trayOriginalPositions[i].clone();
+                stack.meshGroup.position.x += 10;
+                gsap.to(stack.meshGroup.position, {
+                    x: targetPos.x,
+                    y: targetPos.y,
+                    z: targetPos.z,
+                    duration: 0.6,
+                    delay: i * 0.1,
+                    ease: "back.out(1.2)"
+                });
+            });
+        }
+
+        /**
+         * 同期：HTMLのスロット位置に合わせて3Dオブジェクトの位置を更新する
+         */
+        function updateTrayPositions() {
+            trayStacks.forEach((stack, i) => {
+                if (!stack || stack === draggedStack) return;
+
+                const slot = document.getElementById(`slot-${i}`);
+                if (!slot) return;
+
+                const rect = slot.getBoundingClientRect();
+                const x = ((rect.left + rect.width / 2) / window.innerWidth) * 2 - 1;
+                const y = -((rect.top + rect.height / 2) / window.innerHeight) * 2 + 1;
+
+                const vector = new THREE.Vector3(x, y, 0.5);
+                vector.unproject(camera);
+                const dir = vector.sub(camera.position).normalize();
+                const distance = -camera.position.y / dir.y; 
+                const worldPos = camera.position.clone().add(dir.multiplyScalar(distance));
+
+                stack.meshGroup.position.copy(worldPos);
+                trayOriginalPositions[i].copy(worldPos); 
+            });
+        }
+
+        /**
+         * 初期配置：フィールド上にデモ用のタイルを置く
+         */
+        function placeInitialStacks() {
+            const testPositions = [{ q: 0, r: 0 }, { q: 1, r: -1 }];
+            testPositions.forEach(pos => {
+                const tileData = hexGridData.find(t => t.q === pos.q && t.r === pos.r);
+                if (tileData && tileData.type === TILE_TYPE_NORMAL) {
+                    tileData.state = 'filled';
+                    tileData.stack = generateRandomStackData();
+                    rebuildTileMesh(tileData);
+                }
+            });
+            updateCameraPosition(); 
+        }
+
+        /**
+         * カメラ：方位角や距離に基づき座標を更新し、テクスチャの向きを調整する
+         */
+        function updateCameraPosition() {
+            camera.position.x = cameraParams.distance * Math.sin(CAMERA_POLAR) * Math.sin(cameraParams.azimuth);
+            camera.position.y = cameraParams.distance * Math.cos(CAMERA_POLAR);
+            camera.position.z = cameraParams.distance * Math.sin(CAMERA_POLAR) * Math.cos(cameraParams.azimuth);
+            
+            camera.lookAt(0, 0, 0);
+
+            topTextures.forEach(tex => {
+                tex.rotation = cameraParams.azimuth - Math.PI / 6 + Math.PI / 2;
+            });
+
+            updateTrayPositions();
+        }
+
+        /**
+         * カメラ：フィールドが画面に収まるよう自動的に距離(ズーム)を調整する
+         */
+        function adjustCameraZoom(animateFlag = true) {
+            const fieldRadius = MAP_RADIUS * HEX_SIZE * 2.0;                                 
+            const fov = camera.fov * (Math.PI / 180);                                            
+            const aspect = camera.aspect;
+            
+            const distanceHeight = fieldRadius / Math.tan(fov / 2);
+            const distanceWidth = (fieldRadius / aspect) / Math.tan(fov / 2);
+            
+            const targetDistance = Math.max(distanceHeight, distanceWidth) * ZOOM_MARGIN; 
+
+            if (animateFlag) {
+                gsap.to(cameraParams, {
+                    distance: targetDistance,
+                    duration: 0.8,                                  
+                    ease: "power2.out",
+                    onUpdate: updateCameraPosition
+                });
+            } else {
+                cameraParams.distance = targetDistance;
+                updateCameraPosition();
+            }
+        }
+
+        /**
+         * 入力：ポインター押下時の処理
+         */
+        function onPointerDown(event) {
+            mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+
+            raycaster.setFromCamera(mouse, camera);
+
+            const trayMeshes = [];
+            trayStacks.forEach(s => { if(s) trayMeshes.push(...s.meshGroup.children); });
+            const trayIntersects = raycaster.intersectObjects(trayMeshes, true);
+
+            if (trayIntersects.length > 0) {
+                draggedStack = trayIntersects[0].object.userData.owner;
+                gsap.to(draggedStack.meshGroup.position, { y: DRAG_Y_OFFSET, duration: 0.2 });
+            } else {
+                isDragging = true;
+                previousPointerX = event.clientX;
+                previousPointerY = event.clientY;
+                gsap.killTweensOf(cameraParams); 
+            }
+        }
+
+        /**
+         * 入力：ポインター移動時の処理
+         */
+        function onPointerMove(event) {
+            mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+
+            if (draggedStack) {
+                raycaster.setFromCamera(mouse, camera);
+                const dragPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -DRAG_Y_OFFSET);
+                const intersectPoint = new THREE.Vector3();
+                raycaster.ray.intersectPlane(dragPlane, intersectPoint);
+                if (intersectPoint) {
+                    draggedStack.meshGroup.position.x = intersectPoint.x;
+                    draggedStack.meshGroup.position.z = intersectPoint.z;
+                }
+            } else if (isDragging) {
+                const deltaX = event.clientX - previousPointerX;
+                cameraParams.azimuth -= deltaX * ROTATION_SPEED;
+                updateCameraPosition();
+                previousPointerX = event.clientX;
+                previousPointerY = event.clientY;
+            }
+        }
+
+        /**
+         * 入力：ポインター離した時の処理
+         */
+        function onPointerUp() {
+            if (draggedStack) {
+                raycaster.setFromCamera(mouse, camera);
+                const intersects = raycaster.intersectObjects(hexMeshes);
+
+                if (intersects.length > 0) {
+                    const targetHexMesh = intersects[0].object;
+                    const q = targetHexMesh.userData.q;
+                    const r = targetHexMesh.userData.r;
+                    const tileData = hexGridData.find(t => t.q === q && t.r === r);
+
+                    if (tileData && tileData.state === 'empty' && tileData.type === TILE_TYPE_NORMAL) {
+                        tileData.state = 'filled';
+                        tileData.stack = JSON.parse(JSON.stringify(draggedStack.stackData));
+                        
+                        scene.remove(draggedStack.meshGroup);
+                        rebuildTileMesh(tileData);
+
+                        trayStacks[draggedStack.slotIndex] = null;
+                        draggedStack = null;
+                        
+                        currentPlacedTile = { q: q, r: r };
+
+                        if (isLogicProcessing && forceCompleteLogic) {
+                            forceCompleteLogic(true);
+                        }
+
+                        scanAndMerge();
+
+                        if (trayStacks.every(s => s === null)) {
+                            refillTray();
+                        }
+                    } else {
+                        returnToTray(draggedStack);
+                    }
+                } else {
+                    returnToTray(draggedStack);
+                }
+            }
+
+            if (isDragging) {
+                isDragging = false;
+                const snapAngle = Math.PI / 3; 
+                const targetAzimuth = Math.round(cameraParams.azimuth / snapAngle) * snapAngle;
+                gsap.to(cameraParams, {
+                    azimuth: targetAzimuth, duration: 0.6, ease: "back.out(1.5)", onUpdate: updateCameraPosition
+                });
+                adjustCameraZoom(true);
+            }
+        }
+
+        /**
+         * 入力：キーボードのキーが押された時の処理
+         */
+        function onKeyDown(event) {
+            if (event.key === 'r' || event.key === 'R') {
+                confirmReset();
+            }
+        }
+
+        /**
+         * システム：ゲームのリセット確認とデータの初期化を実行する
+         */
+        function confirmReset() {
+            if (confirm("ゲームをリセットして最初からやり直しますか？\n進行状況は失われます。")) {
+                resetGame();
+            }
+        }
+
+        /**
+         * システム：ゲーム全体を初期状態に戻す
+         */
+        function resetGame() {
+            localStorage.removeItem('hexPuzzleGameState');
+            location.reload();
+        }
+
+        /**
+         * システム：現在のステージをクリアし、次のステージへ進行する
+         */
+        function nextStage() {
+            document.getElementById('level-clear-modal').style.display = 'none';
+            currentStage++;
+            isLevelCleared = false;
+            
+            // 次の目標スコアを現在のスコア＋100〜400（10刻み）のランダム値で設定
+            targetScore = score + (Math.floor(Math.random() * ((MAX_SCORE_STEP - SCORE_STEP) / 10 + 1)) * 10 + SCORE_STEP); 
+            
+            document.getElementById('stage-val').innerText = currentStage;
+            document.getElementById('target-val').innerText = targetScore;
+
+            hexGridData.forEach(t => {
+                if (t.meshGroup) {
+                    scene.remove(t.meshGroup);
+                    t.meshGroup = null;
+                }
+                t.state = 'empty';
+                t.stack = [];
+                t.type = TILE_TYPE_NORMAL;
+                t.hp = 0;
+                t.maxHp = 0;
+                t.missionCompleted = false;
+                t.frozenStack = null;
+                t.unlockScore = 0;
+            });
+            
+            trayStacks.forEach(s => {
+                if (s && s.meshGroup) scene.remove(s.meshGroup);
+            });
+            trayStacks = [null, null, null];
+            
+            placeSpecialTiles(currentStage);
+            placeInitialStacks();
+            refillTray();
+            saveGame();
+        }
+
+        /**
+         * シミュレーション用：現在のグリッド状態をディープコピーして返す
+         */
+        function cloneGrid(grid) {
+            return grid.map(t => ({
+                q: t.q,
+                r: t.r,
+                state: t.state,
+                type: t.type,
+                hp: t.hp,
+                maxHp: t.maxHp,
+                missionCompleted: t.missionCompleted,
+                frozenStack: t.frozenStack ? t.frozenStack.map(b => ({ color: b.color, count: b.count })) : null,
+                unlockScore: t.unlockScore,
+                stack: t.stack.map(b => ({ color: b.color, count: b.count }))
+            }));
+        }
+
+        /**
+         * シミュレーション用：10枚以上重なっている（消滅対象の）マスを取得する
+         */
+        function getOverStackTiles(grid) {
+            return grid.filter(t => t.stack.length > 0 && t.stack[t.stack.length - 1].count >= CLEAR_THRESHOLD);
+        }
+
+        /**
+         * シミュレーション用：隣接する同色トップブロックを持つ結合可能なグループを全て取得する
+         */
+        function getMergeableGroups(grid) {
+            const groups = [];
+            const visited = new Set();
+            
+            for (let i = 0; i < grid.length; i++) {
+                const startTile = grid[i];
+                if (startTile.stack.length === 0) continue;
+                
+                const key = `${startTile.q},${startTile.r}`;
+                if (visited.has(key)) continue;
+                
+                const targetColor = startTile.stack[startTile.stack.length - 1].color;
+                const queue = [{ q: startTile.q, r: startTile.r }];
+                const currentGroup = [{ q: startTile.q, r: startTile.r }];
+                visited.add(key);
+                
+                while (queue.length > 0) {
+                    const curr = queue.shift();
+                    for (let dir of HEX_DIRECTIONS) {
+                        const nq = curr.q + dir.q;
+                        const nr = curr.r + dir.r;
+                        const nkey = `${nq},${nr}`;
+                        if (!visited.has(nkey)) {
+                            const nTile = grid.find(t => t.q === nq && t.r === nr);
+                            if (nTile && nTile.stack.length > 0) {
+                                if (nTile.stack[nTile.stack.length - 1].color === targetColor) {
+                                    visited.add(nkey);
+                                    queue.push({ q: nq, r: nr });
+                                    currentGroup.push({ q: nq, r: nr });
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                if (currentGroup.length >= 2) {
+                    groups.push(currentGroup);
+                }
+            }
+            return groups;
+        }
+
+        /**
+         * シミュレーション用：仮想グリッド上で消滅処理を適用し、獲得スコアと特別マスへの効果量を返す
+         */
+        function applyClear(grid, q, r) {
+            const tile = grid.find(t => t.q === q && t.r === r);
+            const topBlock = tile.stack.pop();
+            let scoreVal = topBlock.count;
+            let specialDamage = 0;
+
+            HEX_DIRECTIONS.forEach(dir => {
+                let nq = q + dir.q;
+                let nr = r + dir.r;
+                let nTile = grid.find(t => t.q === nq && t.r === nr);
+                if(nTile) {
+                    if((nTile.type === TILE_TYPE_OBSTACLE || nTile.type === TILE_TYPE_FLOWERBED || nTile.type === TILE_TYPE_ICE) && nTile.hp > 0) {
+                        nTile.hp--;
+                        specialDamage++;
+                        if(nTile.hp === 0) {
+                            if(nTile.type === TILE_TYPE_OBSTACLE) { 
+                                nTile.type = TILE_TYPE_NORMAL; nTile.state = 'empty'; 
+                            } else if(nTile.type === TILE_TYPE_FLOWERBED) { 
+                                nTile.missionCompleted = true; 
+                            } else if(nTile.type === TILE_TYPE_ICE) { 
+                                nTile.type = TILE_TYPE_NORMAL; nTile.state = 'filled'; nTile.stack = JSON.parse(JSON.stringify(nTile.frozenStack)); nTile.frozenStack = null; 
+                            }
+                        }
+                    }
+                }
+            });
+
+            return { score: scoreVal, specialDamage: specialDamage };
+        }
+
+        /**
+         * シミュレーション用：仮想グリッド上で結合処理を適用する
+         */
+        function applyMerge(grid, group, targetQ, targetR) {
+            const targetTile = grid.find(t => t.q === targetQ && t.r === targetR);
+            const targetColor = targetTile.stack[targetTile.stack.length - 1].color;
+            let totalMergedCount = 0;
+            
+            for (let pos of group) {
+                const tile = grid.find(t => t.q === pos.q && t.r === pos.r);
+                const block = tile.stack.pop();
+                totalMergedCount += block.count;
+            }
+            
+            targetTile.stack.push({ color: targetColor, count: totalMergedCount });
+        }
+
+        /**
+         * ロジック：現在の盤面状態から、発生しうるすべての移動・消滅の連鎖を最後までシミュレートし、最終状態のリストを返す
+         */
+        function simulate(initialGrid) {
+            let finalStates = [];
+            
+            function search(currentGrid, currentScore, currentSpecialDamage, currentSteps) {
+                let overStackTiles = getOverStackTiles(currentGrid);
+                if (overStackTiles.length > 0) {
+                    let tile = overStackTiles[0];
+                    let nextGrid = cloneGrid(currentGrid);
+                    let clearResult = applyClear(nextGrid, tile.q, tile.r);
+                    search(nextGrid, currentScore + clearResult.score, currentSpecialDamage + clearResult.specialDamage, [...currentSteps, { type: 'clear', target: { q: tile.q, r: tile.r } }]);
+                    return;
+                }
+                
+                let mergeableGroups = getMergeableGroups(currentGrid);
+                if (mergeableGroups.length === 0) {
+                    finalStates.push({
+                        grid: currentGrid,
+                        score: currentScore,
+                        specialDamage: currentSpecialDamage,
+                        steps: currentSteps
+                    });
+                    return;
+                }
+                
+                for (let group of mergeableGroups) {
+                    for (let target of group) {
+                        let nextGrid = cloneGrid(currentGrid);
+                        applyMerge(nextGrid, group, target.q, target.r);
+                        search(nextGrid, currentScore, currentSpecialDamage, [...currentSteps, { type: 'merge', group: group, target: { q: target.q, r: target.r } }]);
+                    }
+                }
+            }
+            
+            search(initialGrid, 0, 0, []);
+            return finalStates;
+        }
+
+        /**
+         * ロジック：シミュレートされた全ての最終状態を評価し、望ましい順にソートする
+         */
+        function evaluateAndSortFinalStates(finalStates, lastPlacedTile) {
+            finalStates.sort((a, b) => {
+                // ⓪ 最優先：ミッション達成に近づく（特別マスへのダメージ合計が最大）
+                if (a.specialDamage !== b.specialDamage) return b.specialDamage - a.specialDamage;
+
+                // ① 消滅するタイル枚数＝加算されるスコアが最も高くなる（降順）
+                if (a.score !== b.score) return b.score - a.score;
+                
+                // ② 同じ色のタイルがなるべく同じ山にまとまっている
+                let aStackBlocks = a.grid.reduce((sum, t) => sum + t.stack.length, 0);
+                let bStackBlocks = b.grid.reduce((sum, t) => sum + t.stack.length, 0);
+                if (aStackBlocks !== bStackBlocks) return aStackBlocks - bStackBlocks;
+                
+                // ③ 最終的に残る空きマスが最も多い（降順）
+                let aEmpty = a.grid.filter(t => t.state === 'empty').length;
+                let bEmpty = b.grid.filter(t => t.state === 'empty').length;
+                if (aEmpty !== bEmpty) return bEmpty - aEmpty;
+                
+                // ④ 直近に追加されたタイルのマスに他のマスからタイルが移動してくる
+                if (lastPlacedTile) {
+                    let aHasTarget = (a.steps.length > 0 && a.steps[0].type === 'merge' && a.steps[0].target.q === lastPlacedTile.q && a.steps[0].target.r === lastPlacedTile.r) ? 1 : 0;
+                    let bHasTarget = (b.steps.length > 0 && b.steps[0].type === 'merge' && b.steps[0].target.q === lastPlacedTile.q && b.steps[0].target.r === lastPlacedTile.r) ? 1 : 0;
+                    if (aHasTarget !== bHasTarget) return bHasTarget - aHasTarget;
+                }
+                
+                return 0; 
+            });
+        }
+
+        /**
+         * ロジック：盤面全体のシミュレーションを実行し、最良の最終状態に向かうための「最初の一手」を決定・実行する
+         */
+        function scanAndMerge() {
+            isLogicProcessing = true;
+
+            let initialGrid = cloneGrid(hexGridData);
+            let finalStates = simulate(initialGrid);
+
+            if (finalStates.length === 0 || !finalStates.some(s => s.steps.length > 0)) {
+                isLogicProcessing = false;
+                forceCompleteLogic = null; 
+                currentPlacedTile = null; 
+                
+                saveGame();
+                
+                if (isLevelCleared) {
+                    document.getElementById('cleared-stage-val').innerText = currentStage;
+                    document.getElementById('level-clear-modal').style.display = 'flex';
+                } else {
+                    checkGameOver();
+                }
+                return;
+            }
+
+            evaluateAndSortFinalStates(finalStates, currentPlacedTile);
+            
+            let bestState = finalStates[0];
+            let nextAction = bestState.steps[0];
+
+            if (nextAction.type === 'clear') {
+                let tileData = hexGridData.find(t => t.q === nextAction.target.q && t.r === nextAction.target.r);
+                clearStack(tileData);
+            } else if (nextAction.type === 'merge') {
+                let connectedTiles = nextAction.group.map(pos => hexGridData.find(t => t.q === pos.q && t.r === pos.r));
+                let targetTile = hexGridData.find(t => t.q === nextAction.target.q && t.r === nextAction.target.r);
+                executeMerge(connectedTiles, targetTile);
+            }
+        }
+
+        /**
+         * ロジック：指定されたタイルのグループをターゲットマスへ結合し、アニメーションを実行する
+         */
+        function executeMerge(connectedTiles, targetTile) {
+            isLogicProcessing = true; 
+
+            const mergeSources = connectedTiles.filter(t => t !== targetTile);
+            const targetFinalTopBlock = targetTile.stack.pop(); 
+            const targetColor = targetFinalTopBlock.color;
+            let totalMergedCount = targetFinalTopBlock.count;
+            
+            const targetWorldPos = axialToWorld(targetTile.q, targetTile.r, HEX_SIZE);
+            let targetBaseHeight = 0;
+            targetTile.stack.forEach(b => targetBaseHeight += b.count * (TILE_HEIGHT + TILE_RIM_HEIGHT + TILE_GAP));
+
+            rebuildTileMesh(targetTile); 
+
+            const meshesToRemove = [];
+            const targetTemp = createTempMeshes(targetWorldPos, targetBaseHeight, targetFinalTopBlock.count, targetColor);
+            targetTemp.forEach(m => { scene.add(m); meshesToRemove.push(m); });
+
+            let currentTargetStackHeight = targetBaseHeight + targetFinalTopBlock.count * (TILE_HEIGHT + TILE_RIM_HEIGHT + TILE_GAP);
+            let animationsCompleted = 0;
+            let totalAnimations = 0;
+            let isFinalized = false; 
+
+            forceCompleteLogic = (skipNextScan = false) => {
+                if (!isFinalized) {
+                    isFinalized = true;
+                    forceCompleteLogic = null;
+                    
+                    meshesToRemove.forEach(m => {
+                        gsap.killTweensOf(m.position); 
+                        scene.remove(m);
+                    });
+                    targetTile.stack.push({ color: targetColor, count: totalMergedCount });
+                    rebuildTileMesh(targetTile);
+                    
+                    if (!skipNextScan) scanAndMerge();
+                }
+            };
+
+            mergeSources.forEach(sourceTile => {
+                const sourceTopBlock = sourceTile.stack.pop();
+                const sourceCount = sourceTopBlock.count;
+                totalMergedCount += sourceCount;
+
+                const sourceWorldPos = axialToWorld(sourceTile.q, sourceTile.r, HEX_SIZE);
+                let sourceBaseHeight = 0;
+                sourceTile.stack.forEach(b => sourceBaseHeight += b.count * (TILE_HEIGHT + TILE_RIM_HEIGHT + TILE_GAP));
+
+                rebuildTileMesh(sourceTile); 
+
+                const tempMeshes = createTempMeshes(sourceWorldPos, sourceBaseHeight, sourceCount, targetColor);
+                tempMeshes.forEach((mesh, index) => {
+                    scene.add(mesh);
+                    meshesToRemove.push(mesh);
+                    totalAnimations++;
+
+                    const endY = currentTargetStackHeight + index * (TILE_HEIGHT + TILE_RIM_HEIGHT + TILE_GAP);
+                    const distance = Math.sqrt(Math.pow(targetWorldPos.x - sourceWorldPos.x, 2) + Math.pow(targetWorldPos.z - sourceWorldPos.z, 2));
+                    const arcHeight = Math.max(mesh.position.y, endY) + distance * 0.4;
+
+                    gsap.to(mesh.position, {
+                        x: targetWorldPos.x, z: targetWorldPos.z,
+                        duration: MERGE_ANIM_DURATION, delay: MERGE_ANIM_DELAY * index, ease: "power1.inOut"
+                    });
+
+                    gsap.to(mesh.position, {
+                        y: arcHeight, duration: MERGE_ANIM_DURATION / 2, delay: MERGE_ANIM_DELAY * index, ease: "power1.out",
+                        onComplete: () => {
+                            gsap.to(mesh.position, {
+                                y: endY, duration: MERGE_ANIM_DURATION / 2, ease: "power1.in",
+                                onComplete: () => {
+                                    animationsCompleted++;
+                                    if (animationsCompleted === totalAnimations) {
+                                        if (forceCompleteLogic) forceCompleteLogic(false);
+                                    }
+                                }
+                            });
+                        }
+                    });
+                });
+                currentTargetStackHeight += sourceCount * (TILE_HEIGHT + TILE_RIM_HEIGHT + TILE_GAP);
+            });
+        }
+
+        /**
+         * ロジック：消滅が発生した際、隣接する特別マスの耐久力を減らし状態を更新する
+         */
+        function triggerSpecialTileEffect(q, r) {
+            let effectTriggered = false;
+            HEX_DIRECTIONS.forEach(dir => {
+                let nq = q + dir.q;
+                let nr = r + dir.r;
+                let nTile = hexGridData.find(t => t.q === nq && t.r === nr);
+                if(nTile) {
+                    if(nTile.type === TILE_TYPE_OBSTACLE && nTile.hp > 0) {
+                        nTile.hp--;
+                        if(nTile.hp === 0) {
+                            nTile.type = TILE_TYPE_NORMAL;
+                            nTile.state = 'empty';
+                        }
+                        rebuildTileMesh(nTile);
+                        effectTriggered = true;
+                    }
+                    else if(nTile.type === TILE_TYPE_FLOWERBED && nTile.hp > 0) {
+                        nTile.hp--;
+                        if(nTile.hp === 0) {
+                            nTile.missionCompleted = true;
+                        }
+                        rebuildTileMesh(nTile);
+                        effectTriggered = true;
+                    }
+                    else if(nTile.type === TILE_TYPE_ICE && nTile.hp > 0) {
+                        nTile.hp--;
+                        if(nTile.hp === 0) {
+                            nTile.type = TILE_TYPE_NORMAL;
+                            nTile.state = 'filled';
+                            nTile.stack = nTile.frozenStack;
+                            nTile.frozenStack = null;
+                        }
+                        rebuildTileMesh(nTile);
+                        effectTriggered = true;
+                    }
+                }
+            });
+            
+            // 効果が発動し特別マスの状態が変わった場合、ミッションUIを更新
+            if (effectTriggered) {
+                updateMissionUI();
+            }
+        }
+
+        /**
+         * 消滅処理：10枚以上重なったタイルを削除しスコアに加算する
+         */
+        function clearStack(tileData) {
+            isLogicProcessing = true;
+            const topBlock = tileData.stack.pop();
+            const points = topBlock.count;
+            const targetColor = topBlock.color;
+
+            triggerSpecialTileEffect(tileData.q, tileData.r);
+
+            let baseHeight = 0;
+            tileData.stack.forEach(b => baseHeight += b.count * (TILE_HEIGHT + TILE_RIM_HEIGHT + TILE_GAP));
+            const worldPos = axialToWorld(tileData.q, tileData.r, HEX_SIZE);
+
+            rebuildTileMesh(tileData);
+
+            const tempMeshes = createTempMeshes(worldPos, baseHeight, topBlock.count, targetColor);
+            const animGroup = new THREE.Group();
+            tempMeshes.forEach(m => animGroup.add(m));
+            scene.add(animGroup);
+
+            let isFinalized = false; 
+
+            forceCompleteLogic = (skipNextScan = false) => {
+                if (!isFinalized) {
+                    isFinalized = true;
+                    forceCompleteLogic = null;
+                    
+                    gsap.killTweensOf(animGroup.scale); 
+                    scene.remove(animGroup);
+                    updateScore(points); 
+                    
+                    if (!skipNextScan) scanAndMerge();
+                }
+            };
+
+            gsap.to(animGroup.scale, {
+                x: 0, y: 1.2, z: 0, 
+                duration: 0.5,
+                ease: "back.in(1.7)",
+                onComplete: () => {
+                    if (forceCompleteLogic) forceCompleteLogic(false);
+                }
+            });
+        }
+
+        /**
+         * 判定：空きマスがなくなった場合にゲームオーバーを表示する
+         * 配置可能な通常マスが一つもない場合に発動する
+         */
+        function checkGameOver() {
+            const emptyTiles = hexGridData.filter(t => t.state === 'empty' && t.type === TILE_TYPE_NORMAL);
+            if (emptyTiles.length === 0 && !isLogicProcessing && !isLevelCleared) {
+                document.getElementById('final-score').innerText = score;
+                document.getElementById('game-over-modal').style.display = 'flex';
+                localStorage.removeItem('hexPuzzleGameState'); 
+            }
+        }
+
+        /**
+         * 補助：配置できなかったスタックを元のトレイ位置に戻す
+         */
+        function returnToTray(stack) {
+            const originalPos = trayOriginalPositions[stack.slotIndex];
+            gsap.to(stack.meshGroup.position, {
+                x: originalPos.x, y: originalPos.y, z: originalPos.z, duration: 0.4, ease: "power2.out"
+            });
+            draggedStack = null;
+        }
+
+        /**
+         * システム：ウィンドウリサイズ時に描画領域を再計算する
+         */
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            adjustCameraZoom(false);
+            updateTrayPositions();
+        }
+
+        /**
+         * ループ：メインレンダリング処理
+         */
+        function animate() {
+            requestAnimationFrame(animate);
+            renderer.render(scene, camera);
+        }
+
+        window.onload = init;
+    </script>
+</body>
+</html>

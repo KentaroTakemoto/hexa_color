@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hex Puzzle Game - Step 1</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background-color: #C0D6E4; /* 添付画像の背景色に近い色 */
+        }
+        #game-container {
+            width: 100vw;
+            height: 100vh;
+        }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
+</head>
+<body>
+    <div id="game-container"></div>
+
+    <script>
+        // --- 1. グローバル設定とデータ構造の初期化 ---
+        const HEX_SIZE = 2; // 六角形のサイズ（半径）
+        const HEX_HEIGHT = 0.5; // マスの厚み
+        const MAP_RADIUS = 2; // フィールドの広さ（2にすると中心+2周で計19マスになり、10~30の条件に合致します）
+        
+        let scene, camera, renderer;
+        let hexGridData = []; // 各マスのデータ構造を保持
+
+        // 軸座標系 (q, r) から ワールド座標 (x, z) への変換関数 (Flat-topped hex)
+        function axialToWorld(q, r, size) {
+            const x = size * (3/2) * q;
+            const z = size * (Math.sqrt(3)/2) * q + size * Math.sqrt(3) * r;
+            return { x, z };
+        }
+
+        // --- 2. Three.js シーン構築 ---
+        function init() {
+            const container = document.getElementById('game-container');
+
+            // シーンの作成
+            scene = new THREE.Scene();
+
+            // カメラの作成（PerspectiveCamera）
+            camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 1, 1000);
+            // フィールドを見下ろす斜めの角度に配置
+            camera.position.set(0, 25, 20);
+            camera.lookAt(0, 0, 0);
+
+            // レンダラーの作成
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            // 影の設定を有効化
+            renderer.shadowMap.enabled = true;
+            container.appendChild(renderer.domElement);
+
+            // ライトの追加
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6); // 環境光
+            scene.add(ambientLight);
+
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.6); // 平行光源
+            directionalLight.position.set(10, 20, 10);
+            directionalLight.castShadow = true;
+            directionalLight.shadow.mapSize.width = 1024;
+            directionalLight.shadow.mapSize.height = 1024;
+            scene.add(directionalLight);
+
+            // フィールドの生成
+            generateField();
+
+            // ウィンドウリサイズ対応
+            window.addEventListener('resize', onWindowResize, false);
+
+            // アニメーションループ開始
+            animate();
+        }
+
+        // --- 3. 六角形フィールドの描画 ---
+        function generateField() {
+            // 六角柱のジオメトリ（CylinderGeometry(radiusTop, radiusBottom, height, radialSegments)）
+            // radiusがHEX_SIZEに相当。6角形で生成する。
+            const geometry = new THREE.CylinderGeometry(HEX_SIZE, HEX_SIZE, HEX_HEIGHT, 6);
+            
+            // ベースマスのマテリアル（添付画像のグレーに近い色）
+            const material = new THREE.MeshStandardMaterial({ 
+                color: 0xaaaaaa, // グレー
+                roughness: 0.7,
+                metalness: 0.1
+            });
+
+            // 軸座標系を用いて六角形に並べるためのループ処理
+            for (let q = -MAP_RADIUS; q <= MAP_RADIUS; q++) {
+                const r1 = Math.max(-MAP_RADIUS, -q - MAP_RADIUS);
+                const r2 = Math.min(MAP_RADIUS, -q + MAP_RADIUS);
+                
+                for (let r = r1; r <= r2; r++) {
+                    // データ構造の初期化
+                    const tileData = {
+                        q: q,
+                        r: r,
+                        state: 'empty', // 初期状態は空きマス
+                        stack: [] // 将来的にここにタイルのスタックデータを格納
+                    };
+                    hexGridData.push(tileData);
+
+                    // 座標変換
+                    const pos = axialToWorld(q, r, HEX_SIZE);
+
+                    // メッシュの作成
+                    const hexMesh = new THREE.Mesh(geometry, material);
+                    
+                    // CylinderGeometryはデフォルトでY軸に沿って生成されるため、そのまま配置
+                    // ただし、計算式（Flat-topped）に見た目を合わせるためY軸で30度(Math.PI / 6)回転
+                    hexMesh.rotation.y = Math.PI / 6; 
+
+                    // 座標のセット
+                    hexMesh.position.set(pos.x, -HEX_HEIGHT / 2, pos.z);
+                    hexMesh.receiveShadow = true;
+                    hexMesh.castShadow = true;
+
+                    // シーンに追加
+                    scene.add(hexMesh);
+                }
+            }
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            renderer.render(scene, camera);
+        }
+
+        // 実行
+        window.onload = init;
+    </script>
+</body>
+</html>

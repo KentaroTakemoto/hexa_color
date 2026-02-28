@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hex Puzzle Game - Step 2</title>
+    <style>
+        /* 画面全体のレイアウト設定：余白を消し、スクロールを防止 */
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background-color: #C0D6E4; /* 背景色：添付画像の空色に近い色 */
+        }
+        /* ゲーム画面を表示するコンテナのサイズ設定 */
+        #game-container {
+            width: 100vw;
+            height: 100vh;
+        }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
+</head>
+<body>
+    <div id="game-container"></div>
+
+    <script>
+        // --- 1. グローバル設定とデータ構造の初期化 ---
+        // ゲーム全体で使用する定数や状態を保持する変数を定義します。
+        const HEX_SIZE = 2; // 六角形の中心から頂点までの基本距離
+        const HEX_HEIGHT = 0.5; // マスの厚み（Y軸方向の高さ）
+        const HEX_MARGIN = 0.1; // マス同士の隙間の大きさ
+        const MAP_RADIUS = 2; // フィールドの層数（中心から外側への周回数）
+        
+        let scene, camera, renderer;
+        let hexGridData = []; // 各マスの状態（座標、スタック等）を保持する配列
+
+        // --- 軸座標系 (q, r) から 3D空間のワールド座標 (x, z) への変換関数 ---
+        // 六角形グリッド（Flat-topped型）の幾何学計算に基づき、中心座標を算出します。
+        function axialToWorld(q, r, size) {
+            const x = size * (3/2) * q;
+            const z = size * (Math.sqrt(3)/2) * q + size * Math.sqrt(3) * r;
+            return { x, z };
+        }
+
+        // --- 2. Three.js シーンの構築 ---
+        // 3D空間、カメラ、レンダラー、照明をセットアップし、ゲームの基盤を作ります。
+        function init() {
+            const container = document.getElementById('game-container');
+
+            // 3Dオブジェクトを配置するシーンの作成
+            scene = new THREE.Scene();
+
+            // 遠近感のあるカメラの作成
+            camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 1, 1000);
+            // フィールドを見下ろす位置にカメラを配置
+            camera.position.set(0, 25, 20); // カメラの初期位置（X, Y, Z）
+            camera.lookAt(0, 0, 0); // カメラを常に中心（0, 0, 0）に向ける
+
+            // WebGLレンダラーの作成（アンチエイリアス有効、背景透過許可）
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer.setSize(window.innerWidth, window.innerHeight); // 描画サイズをウィンドウに合わせる
+            renderer.setPixelRatio(window.devicePixelRatio); // 解像度設定
+            
+            // 影のレンダリング設定を有効化
+            renderer.shadowMap.enabled = true;
+            container.appendChild(renderer.domElement);
+
+            // 環境光：全体を均等に照らし、暗部を底上げする
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6); // 色, 強度
+            scene.add(ambientLight);
+
+            // 平行光源：特定の方向から照らし、影を生成する
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.6); // 色, 強度
+            directionalLight.position.set(10, 20, 10); // 光源の配置位置
+            directionalLight.castShadow = true; // 影を落とす設定
+            // 影の品質（マップサイズ）設定
+            directionalLight.shadow.mapSize.width = 1024;
+            directionalLight.shadow.mapSize.height = 1024;
+            scene.add(directionalLight);
+
+            // フィールド（六角形グリッド）を生成
+            generateField();
+
+            // ウィンドウサイズが変更された際の調整処理を登録
+            window.addEventListener('resize', onWindowResize, false);
+
+            // 描画ループの開始
+            animate();
+        }
+
+        // --- 3. 六角形フィールドの生成 ---
+        // 軸座標系に基づいてループを行い、指定された範囲にタイル（マス）を配置します。
+        // マス同士の間に隙間を作るため、配置間隔に対してメッシュのサイズをわずかに小さく設定します。
+        function generateField() {
+            // 六角柱の形状データ（上面半径, 下面半径, 高さ, 分割数）
+            // 半径からHEX_MARGINを引くことで、マス同士の境界に見える隙間を確保します。
+            const geometry = new THREE.CylinderGeometry(HEX_SIZE - HEX_MARGIN, HEX_SIZE - HEX_MARGIN, HEX_HEIGHT, 6);
+            
+            // 六角形タイルの基本外観（グレーのマットな質感）
+            const material = new THREE.MeshStandardMaterial({ 
+                color: 0xaaaaaa, // タイルの基本色（グレー）
+                roughness: 0.7, // 表面の粗さ（1に近いほど光を拡散）
+                metalness: 0.1 // 金属感（0に近いほど非金属）
+            });
+
+            // 軸座標(q, r)を用いて、中心から指定した半径の範囲を埋めるループ
+            for (let q = -MAP_RADIUS; q <= MAP_RADIUS; q++) {
+                const r1 = Math.max(-MAP_RADIUS, -q - MAP_RADIUS);
+                const r2 = Math.min(MAP_RADIUS, -q + MAP_RADIUS);
+                
+                for (let r = r1; r <= r2; r++) {
+                    // 各マスの論理的なデータ構造を定義
+                    const tileData = {
+                        q: q, // 軸座標q
+                        r: r, // 軸座標r
+                        state: 'empty', // マスの状態管理（empty, occupied等）
+                        stack: [] // マスの上に載っているタイルの情報を保持する配列
+                    };
+                    hexGridData.push(tileData);
+
+                    // 軸座標からワールド座標（x, z）を取得
+                    // 配置計算にはマージンを含まない本来のHEX_SIZEを使用します。
+                    const pos = axialToWorld(q, r, HEX_SIZE);
+
+                    // 3Dメッシュ（形状 + 材質）の作成
+                    const hexMesh = new THREE.Mesh(geometry, material);
+                    
+                    // CylinderGeometryは縦向きに生成されるため、角度を調整して向きを合わせる
+                    hexMesh.rotation.y = Math.PI / 6; // 30度回転させてFlat-toppedの形状に合わせる
+
+                    // タイルを配置（Y座標は厚みの半分だけ下げて上面を地面の高さに合わせる）
+                    hexMesh.position.set(pos.x, -HEX_HEIGHT / 2, pos.z);
+                    hexMesh.receiveShadow = true; // 他のオブジェクトの影を受ける
+                    hexMesh.castShadow = true; // 自身の影を落とす
+
+                    // 構築したメッシュをシーンに追加
+                    scene.add(hexMesh);
+                }
+            }
+        }
+
+        // --- ウィンドウリサイズ時の処理 ---
+        // ブラウザの画面サイズが変更された際、カメラのアスペクト比とレンダラーのサイズを再計算します。
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight; // アスペクト比の更新
+            camera.updateProjectionMatrix(); // カメラ行列の更新
+            renderer.setSize(window.innerWidth, window.innerHeight); // レンダラーサイズの更新
+        }
+
+        // --- アニメーションループ ---
+        // 1秒間に約60回実行されるメインループで、シーンのレンダリングを継続します。
+        function animate() {
+            requestAnimationFrame(animate);
+            renderer.render(scene, camera); // シーンの内容をカメラ視点で描画
+        }
+
+        // ページ読み込み完了時に初期化処理を実行
+        window.onload = init;
+    </script>
+</body>
+</html>
