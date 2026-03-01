@@ -1085,6 +1085,7 @@
 	        availableTypes.sort(() => Math.random() - 0.5);
 	        // 先頭の2種類だけを残す（これで同時に3種類までになる）
 	        availableTypes = availableTypes.slice(0, 3);
+	    }
 
 	    // 4. 選ばれた種類と個数を、実際の変数に代入します
 	    availableTypes.forEach(item => {
@@ -1870,6 +1871,4 @@
         window.onload = init;
     </script>
 </body>
-
 </html>
-
